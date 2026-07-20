@@ -42,7 +42,7 @@ jobs:
           "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --target ParallaxStyle_VST3 --parallel
 
       - name: Upload VST3
         uses: actions/upload-artifact@v4
@@ -51,13 +51,4 @@ jobs:
           path: |
             build/ParallaxStyle_artefacts/Release/VST3/
             build/ParallaxStyle_artefacts/VST3/
-          if-no-files-found: error
-
-      - name: Upload Standalone
-        uses: actions/upload-artifact@v4
-        with:
-          name: ParallaxStyle-${{ matrix.name }}-standalone
-          path: |
-            build/ParallaxStyle_artefacts/Release/Standalone/
-            build/ParallaxStyle_artefacts/Standalone/
           if-no-files-found: error

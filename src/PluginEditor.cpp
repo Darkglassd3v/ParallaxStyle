@@ -1,16 +1,45 @@
 #include "PluginEditor.h"
 
 //==============================================================================
+// Helpers locali
+//==============================================================================
+static void styleKnob (juce::Component& parent, juce::Slider& s, juce::Label& l,
+                       const juce::String& name)
+{
+    s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 16);
+    parent.addAndMakeVisible (s);
+
+    l.setText (name, juce::dontSendNotification);
+    l.setJustificationType (juce::Justification::centred);
+    l.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    l.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
+    parent.addAndMakeVisible (l);
+}
+
+//==============================================================================
 // TunerComponent
 //==============================================================================
 TunerComponent::TunerComponent (ParallaxStyleProcessor& p) : processor (p)
 {
+    pTunerOn = processor.apvts.getRawParameterValue ("tuneron");
     startTimerHz (20);
 }
 
 void TunerComponent::timerCallback()
 {
-    // Scarica tutto il FIFO in un buffer rolling
+    if (pTunerOn->load() < 0.5f)
+    {
+        if (hasSignal || windowFill > 0)
+        {
+            hasSignal = false;
+            windowFill = 0;
+            smoothedFreq = 0.0f;
+        }
+        repaint();
+        return;
+    }
+
     const int got = processor.readTunerSamples (readTemp.data(), (int) readTemp.size());
     for (int i = 0; i < got; ++i)
     {
@@ -28,7 +57,6 @@ void TunerComponent::timerCallback()
     if (windowFill < windowSize)
         return;
 
-    // Gate su RMS: sotto soglia non mostrare nulla
     float rms = 0.0f;
     for (int i = 0; i < windowSize; ++i)
         rms += window[(size_t) i] * window[(size_t) i];
@@ -48,7 +76,6 @@ void TunerComponent::timerCallback()
         smoothedFreq = smoothedFreq <= 0.0f ? freq
                      : 0.7f * smoothedFreq + 0.3f * freq;
 
-        // MIDI note number (A4 = 440 Hz = 69)
         const float midi = 69.0f + 12.0f * std::log2 (smoothedFreq / 440.0f);
         const int   nearest = (int) std::lround (midi);
         cents = (midi - (float) nearest) * 100.0f;
@@ -67,11 +94,10 @@ float TunerComponent::detectPitch() const
 {
     const double sr = processor.getTunerSampleRate();
     const int maxTau = windowSize / 2;
-    const int minTau = juce::jmax (2, (int) (sr / 400.0));   // <= 400 Hz: range basso
+    const int minTau = juce::jmax (2, (int) (sr / 400.0));
 
     std::vector<float> diff ((size_t) maxTau, 0.0f);
 
-    // Difference function
     for (int tau = minTau; tau < maxTau; ++tau)
     {
         float sum = 0.0f;
@@ -83,7 +109,6 @@ float TunerComponent::detectPitch() const
         diff[(size_t) tau] = sum;
     }
 
-    // Cumulative mean normalized difference
     std::vector<float> cmnd ((size_t) maxTau, 1.0f);
     float runningSum = 0.0f;
     for (int tau = minTau; tau < maxTau; ++tau)
@@ -94,7 +119,6 @@ float TunerComponent::detectPitch() const
                            : 1.0f;
     }
 
-    // Primo minimo sotto soglia
     constexpr float threshold = 0.15f;
     int tauEstimate = -1;
     for (int tau = minTau + 1; tau < maxTau - 1; ++tau)
@@ -111,7 +135,6 @@ float TunerComponent::detectPitch() const
     if (tauEstimate < 0)
         return -1.0f;
 
-    // Interpolazione parabolica
     const float y0 = cmnd[(size_t) (tauEstimate - 1)];
     const float y1 = cmnd[(size_t) tauEstimate];
     const float y2 = cmnd[(size_t) (tauEstimate + 1)];
@@ -124,6 +147,14 @@ float TunerComponent::detectPitch() const
 void TunerComponent::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds();
+
+    if (pTunerOn->load() < 0.5f)
+    {
+        g.setColour (juce::Colour (0xff505058));
+        g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+        g.drawText ("TUNER OFF", bounds, juce::Justification::centred);
+        return;
+    }
 
     if (! hasSignal)
     {
@@ -145,7 +176,6 @@ void TunerComponent::paint (juce::Graphics& g)
                 + (cents >= 0.0f ? "+" : "") + juce::String (cents, 0) + " cent",
                 bounds.removeFromTop (16), juce::Justification::centred);
 
-    // Barra dei cents: -50 .. +50
     auto barArea = bounds.reduced (16, 4).removeFromTop (14);
     g.setColour (juce::Colour (0xff2a2a30));
     g.fillRoundedRectangle (barArea.toFloat(), 4.0f);
@@ -167,22 +197,17 @@ void TunerComponent::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-// ParallaxStyleEditor
+// BandsPage
 //==============================================================================
-ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
-    : AudioProcessorEditor (p), processor (p), tuner (p)
+BandsPage::BandsPage()
 {
-    setLookAndFeel (&lnf);
-
-    setupKnob (xoverS,     xoverL,     "XOVER");
-    setupKnob (compS,      compL,      "COMP");
-    setupKnob (lowSatS,    lowSatL,    "SAT");
-    setupKnob (lowLevelS,  lowLevelL,  "LEVEL");
-    setupKnob (driveS,     driveL,     "DRIVE");
-    setupKnob (toneS,      toneL,      "TONE");
-    setupKnob (highLevelS, highLevelL, "LEVEL");
-    setupKnob (blendS,     blendL,     "BLEND");
-    setupKnob (outputS,    outputL,    "OUTPUT");
+    styleKnob (*this, compS,      compL,      "COMP");
+    styleKnob (*this, lowSatS,    lowSatL,    "SAT");
+    styleKnob (*this, xoverS,     xoverL,     "XOVER");
+    styleKnob (*this, lowLevelS,  lowLevelL,  "LEVEL");
+    styleKnob (*this, driveS,     driveL,     "DRIVE");
+    styleKnob (*this, toneS,      toneL,      "TONE");
+    styleKnob (*this, highLevelS, highLevelL, "LEVEL");
 
     characterBox.addItemList ({ "Tube", "Rodent", "Fuzz" }, 1);
     addAndMakeVisible (characterBox);
@@ -191,17 +216,107 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     characterL.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     characterL.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
     addAndMakeVisible (characterL);
+}
 
+void BandsPage::paint (juce::Graphics& g)
+{
+    g.setColour (juce::Colour (0xff707078));
+    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+    g.drawText ("LOW BAND",  16, 8,  200, 16, juce::Justification::left);
+    g.drawText ("HIGH BAND", 16, 116, 200, 16, juce::Justification::left);
+
+    g.setColour (juce::Colour (0xff34343c));
+    g.fillRect (12, 110, getWidth() - 24, 1);
+}
+
+void BandsPage::resized()
+{
+    const int knobW = 76, knobH = 74, labelH = 16;
+
+    auto place = [&] (juce::Slider& s, juce::Label& l, int x, int y)
+    {
+        l.setBounds (x, y, knobW, labelH);
+        s.setBounds (x, y + labelH, knobW, knobH);
+    };
+
+    // riga LOW
+    place (compS,     compL,      30, 26);
+    place (lowSatS,   lowSatL,   190, 26);
+    place (xoverS,    xoverL,    350, 26);
+    place (lowLevelS, lowLevelL, 510, 26);
+
+    // riga HIGH
+    place (driveS,     driveL,     30, 134);
+    place (toneS,      toneL,     190, 134);
+    place (highLevelS, highLevelL, 510, 134);
+
+    characterL.setBounds   (350, 150, 100, labelH);
+    characterBox.setBounds (350, 170, 100, 26);
+}
+
+//==============================================================================
+// CabPage
+//==============================================================================
+CabPage::CabPage()
+{
     cabBox.addItemList ({ "Off", "High Band", "Full Mix" }, 1);
     addAndMakeVisible (cabBox);
-    cabL.setText ("CAB IR", juce::dontSendNotification);
+
+    cabL.setText ("POSIZIONE IR", juce::dontSendNotification);
     cabL.setJustificationType (juce::Justification::centredLeft);
     cabL.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     cabL.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
     addAndMakeVisible (cabL);
 
     addAndMakeVisible (loadIRButton);
-    loadIRButton.onClick = [this]
+
+    irNameLabel.setJustificationType (juce::Justification::centredLeft);
+    irNameLabel.setFont (juce::FontOptions (13.0f));
+    irNameLabel.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
+    addAndMakeVisible (irNameLabel);
+}
+
+void CabPage::resized()
+{
+    cabL.setBounds         (30,  30, 150, 16);
+    cabBox.setBounds       (30,  52, 150, 28);
+    loadIRButton.setBounds (210, 52, 110, 28);
+    irNameLabel.setBounds  (30,  96, getWidth() - 60, 22);
+}
+
+//==============================================================================
+// ParallaxStyleEditor
+//==============================================================================
+ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
+    : AudioProcessorEditor (p), processor (p), tuner (p)
+{
+    setLookAndFeel (&lnf);
+
+    // --- top bar ---
+    styleKnob (*this, inputS,  inputL,  "INPUT");
+    styleKnob (*this, blendS,  blendL,  "BLEND");
+    styleKnob (*this, outputS, outputL, "OUTPUT");
+
+    addAndMakeVisible (inMeter);
+    addAndMakeVisible (outMeter);
+
+    inMeterL.setText ("IN", juce::dontSendNotification);
+    outMeterL.setText ("OUT", juce::dontSendNotification);
+    for (auto* l : { &inMeterL, &outMeterL })
+    {
+        l->setJustificationType (juce::Justification::centredLeft);
+        l->setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        l->setColour (juce::Label::textColourId, juce::Colour (0xff707078));
+        addAndMakeVisible (*l);
+    }
+
+    // --- tab centrale ---
+    tabs.addTab ("BANDS",  juce::Colours::transparentBlack, &bandsPage, false);
+    tabs.addTab ("CAB IR", juce::Colours::transparentBlack, &cabPage,   false);
+    tabs.setTabBarDepth (30);
+    addAndMakeVisible (tabs);
+
+    cabPage.loadIRButton.onClick = [this]
     {
         fileChooser = std::make_unique<juce::FileChooser> (
             "Seleziona un file IR", juce::File(), "*.wav;*.aif;*.aiff;*.flac");
@@ -216,34 +331,34 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
             });
     };
 
-    irNameLabel.setJustificationType (juce::Justification::centredLeft);
-    irNameLabel.setFont (juce::FontOptions (12.0f));
-    irNameLabel.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
-    addAndMakeVisible (irNameLabel);
-
+    // --- tuner ---
+    addAndMakeVisible (tunerToggle);
     addAndMakeVisible (tuner);
 
+    // --- attachments ---
     auto& vts = processor.apvts;
     auto attach = [&] (juce::Slider& s, const char* id)
     {
         sliderAttachments.push_back (std::make_unique<SliderAttachment> (vts, id, s));
     };
 
-    attach (xoverS,     "xover");
-    attach (compS,      "comp");
-    attach (lowSatS,    "lowsat");
-    attach (lowLevelS,  "lowlevel");
-    attach (driveS,     "drive");
-    attach (toneS,      "tone");
-    attach (highLevelS, "highlevel");
-    attach (blendS,     "blend");
-    attach (outputS,    "output");
+    attach (inputS,               "input");
+    attach (blendS,               "blend");
+    attach (outputS,              "output");
+    attach (bandsPage.compS,      "comp");
+    attach (bandsPage.lowSatS,    "lowsat");
+    attach (bandsPage.xoverS,     "xover");
+    attach (bandsPage.lowLevelS,  "lowlevel");
+    attach (bandsPage.driveS,     "drive");
+    attach (bandsPage.toneS,      "tone");
+    attach (bandsPage.highLevelS, "highlevel");
 
-    characterAttachment = std::make_unique<ComboAttachment> (vts, "character", characterBox);
-    cabAttachment       = std::make_unique<ComboAttachment> (vts, "cab", cabBox);
+    characterAttachment = std::make_unique<ComboAttachment> (vts, "character", bandsPage.characterBox);
+    cabAttachment       = std::make_unique<ComboAttachment> (vts, "cab", cabPage.cabBox);
+    tunerAttachment     = std::make_unique<ButtonAttachment> (vts, "tuneron", tunerToggle);
 
-    startTimerHz (2);   // refresh label IR
-    setSize (720, 480);
+    startTimerHz (30);
+    setSize (720, 560);
 }
 
 ParallaxStyleEditor::~ParallaxStyleEditor()
@@ -253,23 +368,13 @@ ParallaxStyleEditor::~ParallaxStyleEditor()
 
 void ParallaxStyleEditor::timerCallback()
 {
+    inMeter.pushLevel  (processor.consumeInputPeak());
+    outMeter.pushLevel (processor.consumeOutputPeak());
+
     const auto irFile = processor.getIRFile();
-    irNameLabel.setText (irFile == juce::File() ? "nessuna IR caricata"
-                                                : irFile.getFileName(),
-                         juce::dontSendNotification);
-}
-
-void ParallaxStyleEditor::setupKnob (juce::Slider& s, juce::Label& l, const juce::String& name)
-{
-    s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 16);
-    addAndMakeVisible (s);
-
-    l.setText (name, juce::dontSendNotification);
-    l.setJustificationType (juce::Justification::centred);
-    l.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    l.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
-    addAndMakeVisible (l);
+    cabPage.irNameLabel.setText (irFile == juce::File() ? "nessuna IR caricata"
+                                                        : irFile.getFileName(),
+                                 juce::dontSendNotification);
 }
 
 //==============================================================================
@@ -283,34 +388,24 @@ void ParallaxStyleEditor::paint (juce::Graphics& g)
     g.fillAll();
 
     g.setColour (juce::Colour (0xff00c8ff));
-    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("PARALLAX STYLE", 20, 12, 300, 28, juce::Justification::left);
-    g.setColour (juce::Colour (0xff606068));
-    g.setFont (juce::FontOptions (12.0f));
-    g.drawText ("parallel bass processor", 20, 36, 300, 16, juce::Justification::left);
+    g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
+    g.drawText ("PARALLAX STYLE", 20, 10, 300, 24, juce::Justification::left);
 
-    auto drawPanel = [&g] (juce::Rectangle<int> r, const juce::String& title)
+    auto drawPanel = [&g] (juce::Rectangle<int> r)
     {
         g.setColour (juce::Colour (0x30000000));
         g.fillRoundedRectangle (r.toFloat(), 8.0f);
         g.setColour (juce::Colour (0xff34343c));
         g.drawRoundedRectangle (r.toFloat(), 8.0f, 1.0f);
-        g.setColour (juce::Colour (0xff707078));
-        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText (title, r.getX() + 12, r.getY() + 8, r.getWidth() - 24, 16,
-                    juce::Justification::left);
     };
 
-    drawPanel ({  20,  64, 250, 276 }, "LOW BAND");
-    drawPanel ({ 280,  64, 250, 276 }, "HIGH BAND");
-    drawPanel ({ 540,  64, 160, 276 }, "MASTER");
-    drawPanel ({  20, 352, 340, 112 }, "CAB SIM");
-    drawPanel ({ 372, 352, 328, 112 }, "TUNER");
+    drawPanel ({ 20,  40, 680, 128 });   // top bar
+    drawPanel ({ 20, 428, 680, 116 });   // tuner
 }
 
 void ParallaxStyleEditor::resized()
 {
-    const int knobW = 76, knobH = 96, labelH = 16;
+    const int knobW = 76, knobH = 74, labelH = 16;
 
     auto place = [&] (juce::Slider& s, juce::Label& l, int x, int y)
     {
@@ -318,30 +413,20 @@ void ParallaxStyleEditor::resized()
         s.setBounds (x, y + labelH, knobW, knobH);
     };
 
-    // LOW BAND
-    place (compS,     compL,      40,  96);
-    place (lowSatS,   lowSatL,   162,  96);
-    place (xoverS,    xoverL,     40, 220);
-    place (lowLevelS, lowLevelL, 162, 220);
+    // --- top bar: INPUT + meter | BLEND | meter + OUTPUT ---
+    place (inputS,  inputL,   36, 52);
+    place (blendS,  blendL,  322, 52);
+    place (outputS, outputL, 608, 52);
 
-    // HIGH BAND
-    place (driveS,     driveL,     300,  96);
-    place (toneS,      toneL,      422,  96);
-    place (highLevelS, highLevelL, 422, 220);
+    inMeterL.setBounds  (124,  74,  30, 14);
+    inMeter.setBounds   (124,  92, 170, 16);
+    outMeterL.setBounds (426,  74,  30, 14);
+    outMeter.setBounds  (426,  92, 170, 16);
 
-    characterL.setBounds   (300, 236, 100, labelH);
-    characterBox.setBounds (300, 256, 100, 26);
+    // --- tab centrale ---
+    tabs.setBounds (20, 178, 680, 240);
 
-    // MASTER
-    place (blendS,  blendL,  582,  96);
-    place (outputS, outputL, 582, 220);
-
-    // CAB SIM
-    cabL.setBounds         ( 36, 380,  80, labelH);
-    cabBox.setBounds       ( 36, 400, 110, 26);
-    loadIRButton.setBounds (160, 400,  90, 26);
-    irNameLabel.setBounds  ( 36, 432, 308, 20);
-
-    // TUNER
-    tuner.setBounds (380, 376, 312, 84);
+    // --- tuner ---
+    tunerToggle.setBounds (36, 470, 90, 24);
+    tuner.setBounds (200, 440, 320, 96);
 }

@@ -17,6 +17,12 @@ public:
         setColour (juce::PopupMenu::textColourId,        juce::Colour (0xffd0d0d0));
         setColour (juce::TextButton::buttonColourId,     juce::Colour (0xff26262c));
         setColour (juce::TextButton::textColourOffId,    juce::Colour (0xffd0d0d0));
+        setColour (juce::ToggleButton::textColourId,     juce::Colour (0xffd0d0d0));
+        setColour (juce::ToggleButton::tickColourId,     juce::Colour (0xff00c8ff));
+        setColour (juce::TabbedComponent::backgroundColourId, juce::Colours::transparentBlack);
+        setColour (juce::TabbedComponent::outlineColourId,    juce::Colour (0xff34343c));
+        setColour (juce::TabbedButtonBar::tabTextColourId,         juce::Colour (0xff909098));
+        setColour (juce::TabbedButtonBar::frontTextColourId,       juce::Colour (0xff00c8ff));
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -61,8 +67,59 @@ public:
 };
 
 //==============================================================================
-// Accordatore: legge i campioni decimati dal FIFO del processor,
-// stima il pitch con YIN (difference function + CMND + interp. parabolica).
+// Meter di livello peak con decay balistico. Riceve il picco (linear) via
+// pushLevel() dal timer dell'editor; scala -60..0 dBFS.
+class LevelMeter : public juce::Component
+{
+public:
+    void pushLevel (float linearPeak)
+    {
+        const float db = juce::Decibels::gainToDecibels (linearPeak, -60.0f);
+        displayDb = juce::jmax (db, displayDb - 2.0f);   // decay ~60 dB/s @30fps
+        clip = clip || linearPeak >= 1.0f;
+        if (db >= displayDb) clipHold = 30;              // ~1 s
+        if (clipHold > 0) --clipHold; else clip = false;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (juce::Colour (0xff1a1a1e));
+        g.fillRoundedRectangle (r, 3.0f);
+
+        const float norm = juce::jlimit (0.0f, 1.0f, (displayDb + 60.0f) / 60.0f);
+        auto fill = r.reduced (2.0f);
+        fill.setWidth (fill.getWidth() * norm);
+
+        juce::ColourGradient grad (juce::Colour (0xff40e080), r.getX(), 0.0f,
+                                   juce::Colour (0xffe04040), r.getRight(), 0.0f, false);
+        grad.addColour (0.75, juce::Colour (0xffe0c040));
+        g.setGradientFill (grad);
+        g.fillRoundedRectangle (fill, 2.0f);
+
+        if (clip)
+        {
+            g.setColour (juce::Colour (0xffe04040));
+            g.fillRect (r.getRight() - 6.0f, r.getY(), 4.0f, r.getHeight());
+        }
+
+        // tacche a -18 e -6 dB
+        g.setColour (juce::Colour (0x50ffffff));
+        for (float mark : { -18.0f, -6.0f })
+        {
+            const float mx = r.getX() + r.getWidth() * (mark + 60.0f) / 60.0f;
+            g.fillRect (mx, r.getY(), 1.0f, r.getHeight());
+        }
+    }
+
+private:
+    float displayDb = -60.0f;
+    bool clip = false;
+    int clipHold = 0;
+};
+
+//==============================================================================
 class TunerComponent : public juce::Component,
                        private juce::Timer
 {
@@ -75,8 +132,9 @@ private:
     float detectPitch() const;
 
     ParallaxStyleProcessor& processor;
+    std::atomic<float>* pTunerOn = nullptr;
 
-    static constexpr int windowSize = 2048;   // @12 kHz = ~170 ms, fino a ~12 Hz
+    static constexpr int windowSize = 2048;
     std::vector<float> window   = std::vector<float> (windowSize, 0.0f);
     std::vector<float> readTemp = std::vector<float> (windowSize, 0.0f);
     int windowFill = 0;
@@ -85,6 +143,35 @@ private:
     juce::String noteName = "-";
     float cents = 0.0f;
     bool hasSignal = false;
+};
+
+//==============================================================================
+// Pagina BANDS del tab
+class BandsPage : public juce::Component
+{
+public:
+    juce::Slider compS, lowSatS, xoverS, lowLevelS, driveS, toneS, highLevelS;
+    juce::Label  compL, lowSatL, xoverL, lowLevelL, driveL, toneL, highLevelL;
+    juce::ComboBox characterBox;
+    juce::Label characterL;
+
+    BandsPage();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+};
+
+//==============================================================================
+// Pagina CAB IR del tab
+class CabPage : public juce::Component
+{
+public:
+    juce::ComboBox cabBox;
+    juce::Label cabL;
+    juce::TextButton loadIRButton { "LOAD IR" };
+    juce::Label irNameLabel;
+
+    CabPage();
+    void resized() override;
 };
 
 //==============================================================================
@@ -101,26 +188,32 @@ public:
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    void setupKnob (juce::Slider& s, juce::Label& l, const juce::String& name);
-    void timerCallback() override;   // aggiorna la label del file IR
+    void timerCallback() override;   // meter + label IR
 
     ParallaxStyleProcessor& processor;
     DarkLookAndFeel lnf;
 
-    juce::Slider xoverS, compS, lowSatS, lowLevelS, driveS, toneS, highLevelS, blendS, outputS;
-    juce::Label  xoverL, compL, lowSatL, lowLevelL, driveL, toneL, highLevelL, blendL, outputL;
-    juce::ComboBox characterBox, cabBox;
-    juce::Label characterL, cabL;
+    // Top bar (sempre visibile)
+    juce::Slider inputS, blendS, outputS;
+    juce::Label  inputL, blendL, outputL;
+    LevelMeter inMeter, outMeter;
+    juce::Label inMeterL, outMeterL;
 
-    juce::TextButton loadIRButton { "LOAD IR" };
-    juce::Label irNameLabel;
+    // Tab centrale
+    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    BandsPage bandsPage;
+    CabPage cabPage;
     std::unique_ptr<juce::FileChooser> fileChooser;
 
+    // Tuner (sempre visibile, abilitabile)
+    juce::ToggleButton tunerToggle { "TUNER" };
     TunerComponent tuner;
 
     std::vector<std::unique_ptr<SliderAttachment>> sliderAttachments;
     std::unique_ptr<ComboAttachment> characterAttachment, cabAttachment;
+    std::unique_ptr<ButtonAttachment> tunerAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParallaxStyleEditor)
 };

@@ -4,10 +4,7 @@
 //==============================================================================
 namespace
 {
-    inline float shapeTube (float x) noexcept
-    {
-        return std::tanh (x);
-    }
+    inline float shapeTube (float x) noexcept   { return std::tanh (x); }
 
     inline float shapeRodent (float x) noexcept
     {
@@ -22,10 +19,7 @@ namespace
         return s * (1.0f - std::exp (-k * std::abs (x)));
     }
 
-    inline float softSat (float x) noexcept
-    {
-        return x / (1.0f + std::abs (x));
-    }
+    inline float softSat (float x) noexcept     { return x / (1.0f + std::abs (x)); }
 }
 
 //==============================================================================
@@ -35,6 +29,7 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
+    pInput     = apvts.getRawParameterValue ("input");
     pXover     = apvts.getRawParameterValue ("xover");
     pComp      = apvts.getRawParameterValue ("comp");
     pLowSat    = apvts.getRawParameterValue ("lowsat");
@@ -46,6 +41,7 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
     pCab       = apvts.getRawParameterValue ("cab");
     pBlend     = apvts.getRawParameterValue ("blend");
     pOutput    = apvts.getRawParameterValue ("output");
+    pTunerOn   = apvts.getRawParameterValue ("tuneron");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -53,6 +49,9 @@ ParallaxStyleProcessor::createParameterLayout()
 {
     using P = juce::AudioParameterFloat;
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    params.push_back (std::make_unique<P> (juce::ParameterID { "input", 1 },
+        "Input", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "xover", 1 },
         "Crossover", juce::NormalisableRange<float> (80.0f, 1000.0f, 1.0f, 0.4f), 250.0f));
@@ -89,6 +88,9 @@ ParallaxStyleProcessor::createParameterLayout()
     params.push_back (std::make_unique<P> (juce::ParameterID { "output", 1 },
         "Output", juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f));
 
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "tuneron", 1 }, "Tuner", true));
+
     return { params.begin(), params.end() };
 }
 
@@ -99,6 +101,9 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     spec.sampleRate       = sampleRate;
     spec.maximumBlockSize = (juce::uint32) samplesPerBlock;
     spec.numChannels      = (juce::uint32) getTotalNumOutputChannels();
+
+    inputGain.prepare (spec);
+    inputGain.setRampDurationSeconds (0.02);
 
     lowpass.prepare (spec);
     lowpass.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
@@ -171,8 +176,6 @@ void ParallaxStyleProcessor::pushTunerSamples (const juce::AudioBuffer<float>& i
             if (size1 > 0)
                 tunerFifoBuffer[(size_t) start1] = value;
             tunerFifo.finishedWrite (size1 + size2);
-            // Se il FIFO è pieno il campione viene scartato: il tuner è
-            // best-effort, l'audio thread non deve mai bloccarsi.
         }
     }
 }
@@ -189,6 +192,19 @@ int ParallaxStyleProcessor::readTunerSamples (float* dest, int maxSamples)
     return size1 + size2;
 }
 
+void ParallaxStyleProcessor::accumulatePeak (std::atomic<float>& target,
+                                             const juce::AudioBuffer<float>& buf)
+{
+    float peak = 0.0f;
+    for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+        peak = juce::jmax (peak, buf.getMagnitude (ch, 0, buf.getNumSamples()));
+
+    float cur = target.load (std::memory_order_relaxed);
+    while (peak > cur && ! target.compare_exchange_weak (cur, peak,
+                                                         std::memory_order_relaxed))
+        {}
+}
+
 //==============================================================================
 void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                            juce::MidiBuffer&)
@@ -198,29 +214,36 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
 
-    // --- tap per il tuner (input pulito, pre-processing) ---
-    pushTunerSamples (buffer);
-
-    // --- parametri (una volta per blocco) ---
+    // --- parametri ---
     const float xover     = pXover->load();
     const float comp      = pComp->load();
     const float lowSat    = pLowSat->load();
     const int   character = (int) pCharacter->load();
-    const float tone      = pTone->load();
-    const int   cabMode   = (int) pCab->load();   // 0=Off 1=High 2=Full
+    const int   cabMode   = (int) pCab->load();
+    const bool  tunerOn   = pTunerOn->load() > 0.5f;
 
+    inputGain.setGainDecibels (pInput->load());
     lowpass.setCutoffFrequency  (xover);
     highpass.setCutoffFrequency (xover);
     compressor.setThreshold (juce::jmap (comp, 0.0f, 1.0f, 0.0f, -36.0f));
     lowGain.setGainDecibels  (pLowLevel->load());
     driveGain.setGainDecibels (pDrive->load());
-    toneFilter.setCutoffFrequency (tone);
+    toneFilter.setCutoffFrequency (pTone->load());
     highGain.setGainDecibels (pHighLevel->load());
     outputGain.setGainDecibels (pOutput->load());
     dryWet.setWetMixProportion (pBlend->load());
 
-    // --- dry tap ---
     juce::dsp::AudioBlock<float> mainBlock (buffer);
+    juce::dsp::ProcessContextReplacing<float> mainCtx (mainBlock);
+
+    // --- input gain, poi meter e tuner sul segnale post-gain ---
+    inputGain.process (mainCtx);
+    accumulatePeak (inputPeak, buffer);
+
+    if (tunerOn)
+        pushTunerSamples (buffer);
+
+    // --- dry tap ---
     dryWet.pushDrySamples (mainBlock);
 
     // --- split ---
@@ -277,7 +300,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     toneFilter.process (highCtx);
 
-    if (cabMode == 1)                 // IR sulla sola banda alta
+    if (cabMode == 1)
         convolution.process (highCtx);
 
     highGain.process (highCtx);
@@ -289,14 +312,14 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.addFrom  (ch, 0, highBuffer, ch, 0, numSamples);
     }
 
-    juce::dsp::ProcessContextReplacing<float> mainCtx (mainBlock);
-
-    if (cabMode == 2)                 // IR sul mix completo
+    if (cabMode == 2)
         convolution.process (mainCtx);
 
     // --- master ---
     outputGain.process (mainCtx);
     dryWet.mixWetSamples (mainBlock);
+
+    accumulatePeak (outputPeak, buffer);
 }
 
 //==============================================================================
@@ -305,11 +328,10 @@ void ParallaxStyleProcessor::loadIR (const juce::File& file)
     if (! file.existsAsFile())
         return;
 
-    // loadImpulseResponse carica su background thread interno: safe da GUI thread
     convolution.loadImpulseResponse (file,
                                      juce::dsp::Convolution::Stereo::yes,
                                      juce::dsp::Convolution::Trim::yes,
-                                     0,   // 0 = intera IR
+                                     0,
                                      juce::dsp::Convolution::Normalise::yes);
 
     const juce::ScopedLock sl (irPathLock);
