@@ -31,18 +31,8 @@ jobs:
             libxrandr-dev libxinerama-dev libxcursor-dev libfreetype-dev \
             libfontconfig1-dev libglu1-mesa-dev
 
-      - name: Configure (Linux / Windows)
-        if: runner.os != 'macOS'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF
-
-      - name: Configure (macOS, universal binary)
-        if: runner.os == 'macOS'
-        run: >
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF
-          "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
-
       - name: Build
-        run: cmake --build build --config Release --target ParallaxStyle_VST3 --parallel
+        run: cmake --build build --config Release --parallel
 
       - name: Upload VST3
         uses: actions/upload-artifact@v4
@@ -51,4 +41,13 @@ jobs:
           path: |
             build/ParallaxStyle_artefacts/Release/VST3/
             build/ParallaxStyle_artefacts/VST3/
+          if-no-files-found: error
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: ParallaxStyle-${{ matrix.name }}-standalone
+          path: |
+            build/ParallaxStyle_artefacts/Release/Standalone/
+            build/ParallaxStyle_artefacts/Standalone/
           if-no-files-found: error
