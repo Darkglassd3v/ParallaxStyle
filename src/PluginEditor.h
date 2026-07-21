@@ -180,6 +180,7 @@ public:
     juce::Label  irLevelL;
 
     CabPage();
+    void paint (juce::Graphics&) override;
     void resized() override;
 };
 

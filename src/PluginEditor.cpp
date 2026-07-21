@@ -225,6 +225,9 @@ BandsPage::BandsPage()
     addAndMakeVisible (lowOnT);
     addAndMakeVisible (midOnT);
     addAndMakeVisible (highOnT);
+    lowOnT.onStateChange  = [this] { repaint(); };
+    midOnT.onStateChange  = [this] { repaint(); };
+    highOnT.onStateChange = [this] { repaint(); };
 
     midCharBox.addItemList ({ "Tube", "Rodent", "Fuzz", "Doom", "X" }, 1);
     addAndMakeVisible (midCharBox);
@@ -237,15 +240,37 @@ BandsPage::BandsPage()
 
 void BandsPage::paint (juce::Graphics& g)
 {
-    g.setColour (juce::Colour (0xff707078));
-    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.drawText ("LOW · COMP",   16, 8, 200, 16, juce::Justification::left);
-    g.drawText ("MID · EQ",    243, 8, 200, 16, juce::Justification::left);
-    g.drawText ("HIGH · DIST", 470, 8, 200, 16, juce::Justification::left);
+    auto title = [&g] (const juce::String& t, int x, bool on)
+    {
+        g.setColour (on ? juce::Colour (0xff00c8ff) : juce::Colour (0xff4a4a52));
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawText (t, x, 6, 140, 18, juce::Justification::left);
+    };
+
+    const bool lowOn  = lowOnT.getToggleState();
+    const bool midOn  = midOnT.getToggleState();
+    const bool highOn = highOnT.getToggleState();
+
+    // Sfondo scuro sulle colonne disattivate
+    auto dim = [&g] (juce::Rectangle<int> r, bool on)
+    {
+        if (! on)
+        {
+            g.setColour (juce::Colour (0x99101014));
+            g.fillRect (r);
+        }
+    };
+    dim ({   0, 28, 227, getHeight() - 28 }, lowOn);
+    dim ({ 227, 28, 227, getHeight() - 28 }, midOn);
+    dim ({ 454, 28, 226, getHeight() - 28 }, highOn);
+
+    title ("LOW / COMP",  16,  lowOn);
+    title ("MID / EQ",    243, midOn);
+    title ("HIGH / DIST", 470, highOn);
 
     g.setColour (juce::Colour (0xff34343c));
-    g.fillRect (227, 8, 1, getHeight() - 16);
-    g.fillRect (454, 8, 1, getHeight() - 16);
+    g.fillRect (227, 6, 1, getHeight() - 12);
+    g.fillRect (454, 6, 1, getHeight() - 12);
 }
 
 void BandsPage::resized()
@@ -309,6 +334,18 @@ CabPage::CabPage()
     addAndMakeVisible (irNameLabel);
 
     styleKnob (*this, irLevelS, irLevelL, "IR LEVEL");
+
+    cabBox.onChange = [this] { repaint(); };
+}
+
+void CabPage::paint (juce::Graphics& g)
+{
+    // Off = prima voce: oscura tutta la pagina tranne il selettore
+    if (cabBox.getSelectedItemIndex() <= 0)
+    {
+        g.setColour (juce::Colour (0x99101014));
+        g.fillRect (0, 88, getWidth(), getHeight() - 88);
+    }
 }
 
 void CabPage::resized()
