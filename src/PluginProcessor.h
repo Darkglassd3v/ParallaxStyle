@@ -59,6 +59,7 @@ private:
     static void accumulatePeak (std::atomic<float>& target, const juce::AudioBuffer<float>& buf);
 
     juce::dsp::Gain<float> inputGain;
+    juce::dsp::NoiseGate<float> gate;
 
     juce::dsp::LinkwitzRileyFilter<float> lowpass, highpass;
 
@@ -92,6 +93,7 @@ private:
     double tunerSampleRate = 12000.0;
 
     std::atomic<float>* pInput    = nullptr;
+    std::atomic<float>* pGate     = nullptr;
     std::atomic<float>* pXover    = nullptr;
     std::atomic<float>* pComp     = nullptr;
     std::atomic<float>* pLowSat   = nullptr;

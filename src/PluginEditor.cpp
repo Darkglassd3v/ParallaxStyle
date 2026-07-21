@@ -294,6 +294,7 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
 
     // --- top bar ---
     styleKnob (*this, inputS,  inputL,  "INPUT");
+    styleKnob (*this, gateS,   gateL,   "GATE");
     styleKnob (*this, blendS,  blendL,  "BLEND");
     styleKnob (*this, outputS, outputL, "OUTPUT");
 
@@ -343,6 +344,7 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     };
 
     attach (inputS,               "input");
+    attach (gateS,                "gate");
     attach (blendS,               "blend");
     attach (outputS,              "output");
     attach (bandsPage.compS,      "comp");
@@ -413,15 +415,16 @@ void ParallaxStyleEditor::resized()
         s.setBounds (x, y + labelH, knobW, knobH);
     };
 
-    // --- top bar: INPUT + meter | BLEND | meter + OUTPUT ---
-    place (inputS,  inputL,   36, 52);
+    // --- top bar: INPUT GATE + meter IN | BLEND | meter OUT + OUTPUT ---
+    place (inputS,  inputL,   30, 52);
+    place (gateS,   gateL,   106, 52);
     place (blendS,  blendL,  322, 52);
-    place (outputS, outputL, 608, 52);
+    place (outputS, outputL, 594, 52);
 
-    inMeterL.setBounds  (124,  74,  30, 14);
-    inMeter.setBounds   (124,  92, 170, 16);
-    outMeterL.setBounds (426,  74,  30, 14);
-    outMeter.setBounds  (426,  92, 170, 16);
+    inMeterL.setBounds  (192,  74,  30, 14);
+    inMeter.setBounds   (192,  92, 120, 16);
+    outMeterL.setBounds (408,  74,  36, 14);
+    outMeter.setBounds  (408,  92, 120, 16);
 
     // --- tab centrale ---
     tabs.setBounds (20, 178, 680, 240);

@@ -30,6 +30,7 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
       apvts (*this, nullptr, "PARAMS", createParameterLayout())
 {
     pInput     = apvts.getRawParameterValue ("input");
+    pGate      = apvts.getRawParameterValue ("gate");
     pXover     = apvts.getRawParameterValue ("xover");
     pComp      = apvts.getRawParameterValue ("comp");
     pLowSat    = apvts.getRawParameterValue ("lowsat");
@@ -52,6 +53,10 @@ ParallaxStyleProcessor::createParameterLayout()
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "input", 1 },
         "Input", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
+
+    // -80 dB = gate di fatto aperto (default)
+    params.push_back (std::make_unique<P> (juce::ParameterID { "gate", 1 },
+        "Gate", juce::NormalisableRange<float> (-80.0f, -20.0f, 0.1f), -80.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "xover", 1 },
         "Crossover", juce::NormalisableRange<float> (80.0f, 1000.0f, 1.0f, 0.4f), 250.0f));
@@ -104,6 +109,11 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
 
     inputGain.prepare (spec);
     inputGain.setRampDurationSeconds (0.02);
+
+    gate.prepare (spec);
+    gate.setRatio (10.0f);      // quasi hard-gate
+    gate.setAttack (1.0f);      // apre subito: non mangia l'attacco della nota
+    gate.setRelease (80.0f);    // chiude morbido: non tronca il sustain
 
     lowpass.prepare (spec);
     lowpass.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
@@ -223,6 +233,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const bool  tunerOn   = pTunerOn->load() > 0.5f;
 
     inputGain.setGainDecibels (pInput->load());
+    gate.setThreshold (pGate->load());
     lowpass.setCutoffFrequency  (xover);
     highpass.setCutoffFrequency (xover);
     compressor.setThreshold (juce::jmap (comp, 0.0f, 1.0f, 0.0f, -36.0f));
@@ -238,6 +249,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // --- input gain, poi meter e tuner sul segnale post-gain ---
     inputGain.process (mainCtx);
+    gate.process (mainCtx);
     accumulatePeak (inputPeak, buffer);
 
     if (tunerOn)

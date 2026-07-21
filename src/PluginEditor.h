@@ -196,8 +196,8 @@ private:
     DarkLookAndFeel lnf;
 
     // Top bar (sempre visibile)
-    juce::Slider inputS, blendS, outputS;
-    juce::Label  inputL, blendL, outputL;
+    juce::Slider inputS, gateS, blendS, outputS;
+    juce::Label  inputL, gateL, blendL, outputL;
     LevelMeter inMeter, outMeter;
     juce::Label inMeterL, outMeterL;
 
