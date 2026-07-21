@@ -47,6 +47,9 @@ public:
     bool savePreset (const juce::File& file);
     bool loadPreset (const juce::File& file);
 
+    // Riporta tutti i parametri ai valori di default
+    void resetToDefaults();
+
     // Tuner
     int readTunerSamples (float* dest, int maxSamples);
     double getTunerSampleRate() const noexcept { return tunerSampleRate; }
@@ -122,6 +125,8 @@ private:
     std::atomic<float>* pMidFrom  = nullptr;
     std::atomic<float>* pMidTo    = nullptr;
     std::atomic<float>* pMidGain  = nullptr;
+    std::atomic<float>* pMidDrive = nullptr;
+    std::atomic<float>* pMidChar  = nullptr;
     std::atomic<float>* pHighFreq = nullptr;
     std::atomic<float>* pComp     = nullptr;
     std::atomic<float>* pLowSat   = nullptr;

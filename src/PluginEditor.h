@@ -152,8 +152,10 @@ class BandsPage : public juce::Component
 public:
     juce::Slider lowFreqS, compS, lowSatS, lowLevelS;
     juce::Label  lowFreqL, compL, lowSatL, lowLevelL;
-    juce::Slider midFromS, midToS, midGainS;
-    juce::Label  midFromL, midToL, midGainL;
+    juce::Slider midFromS, midToS, midGainS, midDriveS;
+    juce::Label  midFromL, midToL, midGainL, midDriveL;
+    juce::ComboBox midCharBox;
+    juce::Label midCharL;
     juce::Slider highFreqS, driveS, toneS, highLevelS;
     juce::Label  highFreqL, driveL, toneL, highLevelL;
     juce::ComboBox characterBox;
@@ -229,14 +231,14 @@ private:
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     // Preset
-    juce::TextButton presetSaveB { "SAVE" }, presetLoadB { "LOAD" };
+    juce::TextButton presetSaveB { "SAVE" }, presetLoadB { "LOAD" }, resetB { "RESET" };
 
     // Tuner (sempre visibile, abilitabile)
     juce::ToggleButton tunerToggle { "TUNER" };
     TunerComponent tuner;
 
     std::vector<std::unique_ptr<SliderAttachment>> sliderAttachments;
-    std::unique_ptr<ComboAttachment> characterAttachment, cabAttachment;
+    std::unique_ptr<ComboAttachment> characterAttachment, cabAttachment, midCharAttachment;
     std::unique_ptr<ButtonAttachment> tunerAttachment;
     std::unique_ptr<ButtonAttachment> lowOnAttachment, midOnAttachment, highOnAttachment;
 

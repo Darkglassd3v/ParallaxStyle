@@ -41,6 +41,19 @@ namespace
     }
 
     inline float softSat (float x) noexcept     { return x / (1.0f + std::abs (x)); }
+
+    inline void applyShaper (float* d, int n, int character) noexcept
+    {
+        switch (character)
+        {
+            case 0: for (int i = 0; i < n; ++i) d[i] = shapeTube   (d[i]); break;
+            case 1: for (int i = 0; i < n; ++i) d[i] = shapeRodent (d[i]); break;
+            case 2: for (int i = 0; i < n; ++i) d[i] = shapeFuzz   (d[i]); break;
+            case 3: for (int i = 0; i < n; ++i) d[i] = shapeDoom   (d[i]); break;
+            case 4: for (int i = 0; i < n; ++i) d[i] = shapeX      (d[i]); break;
+            default: break;
+        }
+    }
 }
 
 //==============================================================================
@@ -56,6 +69,8 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
     pMidFrom   = apvts.getRawParameterValue ("midfrom");
     pMidTo     = apvts.getRawParameterValue ("midto");
     pMidGain   = apvts.getRawParameterValue ("midgain");
+    pMidDrive  = apvts.getRawParameterValue ("middrive");
+    pMidChar   = apvts.getRawParameterValue ("midchar");
     pHighFreq  = apvts.getRawParameterValue ("highfreq");
     pComp      = apvts.getRawParameterValue ("comp");
     pLowSat    = apvts.getRawParameterValue ("lowsat");
@@ -107,7 +122,14 @@ ParallaxStyleProcessor::createParameterLayout()
         "Mid To", juce::NormalisableRange<float> (200.0f, 5000.0f, 1.0f, 0.5f), 600.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "midgain", 1 },
-        "Mid Gain", juce::NormalisableRange<float> (-18.0f, 18.0f, 0.1f), 0.0f));
+        "Mid Gain", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
+
+    params.push_back (std::make_unique<P> (juce::ParameterID { "middrive", 1 },
+        "Mid Drive", juce::NormalisableRange<float> (0.0f, 40.0f, 0.1f), 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "midchar", 1 }, "Mid Character",
+        juce::StringArray { "Tube", "Rodent", "Fuzz", "Doom", "X" }, 0));
 
     // HIGH: distorci da... in su (100 Hz = fuzz lanoso, 1k+ = definizione chirurgica)
     params.push_back (std::make_unique<P> (juce::ParameterID { "highfreq", 1 },
@@ -120,7 +142,7 @@ ParallaxStyleProcessor::createParameterLayout()
         "Low Sat", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "lowlevel", 1 },
-        "Low Level", juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f));
+        "Low Level", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "drive", 1 },
         "Drive", juce::NormalisableRange<float> (0.0f, 40.0f, 0.1f), 18.0f));
@@ -133,20 +155,20 @@ ParallaxStyleProcessor::createParameterLayout()
         "Tone", juce::NormalisableRange<float> (1000.0f, 12000.0f, 1.0f, 0.4f), 5000.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "highlevel", 1 },
-        "High Level", juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f));
+        "High Level", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
 
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "cab", 1 }, "Cab IR",
         juce::StringArray { "Off", "High Band", "Full Mix" }, 0));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "cablevel", 1 },
-        "IR Level", juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f));
+        "IR Level", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "blend", 1 },
         "Blend", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "output", 1 },
-        "Output", juce::NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f));
+        "Output", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
 
     // EQ post globale
     params.push_back (std::make_unique<P> (juce::ParameterID { "eqlofreq", 1 },
@@ -219,9 +241,9 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     midGain.setRampDurationSeconds (0.02);
 
     compressor.prepare (spec);
-    compressor.setAttack (10.0f);
-    compressor.setRelease (120.0f);
-    compressor.setRatio (4.0f);
+    compressor.setAttack (5.0f);
+    compressor.setRelease (100.0f);
+    compressor.setRatio (8.0f);
 
     lowGain.prepare (spec);
     lowGain.setRampDurationSeconds (0.02);
@@ -385,9 +407,19 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     midHighpass.setCutoffFrequency (midFrom);
     midLowpass.setCutoffFrequency  (midTo);
     highpass.setCutoffFrequency    (highFreq);
-    compressor.setThreshold (juce::jmap (comp, 0.0f, 1.0f, 0.0f, -36.0f));
+    // Compressore da basso "spremuto": il knob 0..1 spinge threshold giù fino a
+    // -50 dB, ratio da 2:1 fino a 12:1, e applica makeup gain automatica così la
+    // riduzione si SENTE come densità, non come semplice attenuazione.
+    const float compThreshold = juce::jmap (comp, 0.0f, 1.0f, 0.0f, -50.0f);
+    const float compRatio     = juce::jmap (comp, 0.0f, 1.0f, 2.0f, 12.0f);
+    compressor.setThreshold (compThreshold);
+    compressor.setRatio (compRatio);
+    // makeup ~ metà della riduzione max teorica al threshold
+    const float compMakeup = comp * (-compThreshold) * (1.0f - 1.0f / compRatio) * 0.6f;
     lowGain.setGainDecibels  (pLowLevel->load());
     midGain.setGainDecibels  (pMidGain->load());
+    const float midDrive   = pMidDrive->load();
+    const int   midChar    = (int) pMidChar->load();
     driveGain.setGainDecibels (pDrive->load());
     toneFilter.setCutoffFrequency (pTone->load());
     highGain.setGainDecibels (pHighLevel->load());
@@ -468,6 +500,9 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         lowpass.process (lowCtx);
         compressor.process (lowCtx);
 
+        if (compMakeup > 0.01f)
+            lowBuffer.applyGain (juce::Decibels::decibelsToGain (compMakeup));
+
         if (lowSat > 0.0f)
         {
             const float satDrive = 1.0f + lowSat * 4.0f;
@@ -489,11 +524,25 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         lowBuffer.clear();
     }
 
-    // --- MID BAND: boost/cut pulito ---
+    // --- MID BAND: filtri, distorsione opzionale, boost/cut ---
     if (midOn)
     {
         midHighpass.process (midCtx);
         midLowpass.process  (midCtx);
+
+        if (midDrive > 0.01f)
+        {
+            const float driveLin = juce::Decibels::decibelsToGain (midDrive);
+            const float comp = 1.0f / std::sqrt (driveLin);   // compensa il boost di drive
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                float* d = midBuffer.getWritePointer (ch);
+                for (int i = 0; i < numSamples; ++i) d[i] *= driveLin;
+                applyShaper (d, numSamples, midChar);
+                for (int i = 0; i < numSamples; ++i) d[i] *= comp;
+            }
+        }
+
         midGain.process (midCtx);
     }
     else
@@ -508,18 +557,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         driveGain.process (highCtx);
 
         for (int ch = 0; ch < numChannels; ++ch)
-        {
-            float* d = highBuffer.getWritePointer (ch);
-            switch (character)
-            {
-                case 0: for (int i = 0; i < numSamples; ++i) d[i] = shapeTube   (d[i]); break;
-                case 1: for (int i = 0; i < numSamples; ++i) d[i] = shapeRodent (d[i]); break;
-                case 2: for (int i = 0; i < numSamples; ++i) d[i] = shapeFuzz   (d[i]); break;
-                case 3: for (int i = 0; i < numSamples; ++i) d[i] = shapeDoom   (d[i]); break;
-                case 4: for (int i = 0; i < numSamples; ++i) d[i] = shapeX      (d[i]); break;
-                default: break;
-            }
-        }
+            applyShaper (highBuffer.getWritePointer (ch), numSamples, character);
 
         toneFilter.process (highCtx);
 
@@ -584,6 +622,14 @@ juce::File ParallaxStyleProcessor::getIRFile() const
 {
     const juce::ScopedLock sl (irPathLock);
     return irPath.isNotEmpty() ? juce::File (irPath) : juce::File();
+}
+
+//==============================================================================
+void ParallaxStyleProcessor::resetToDefaults()
+{
+    for (auto* p : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+            rp->setValueNotifyingHost (rp->getDefaultValue());
 }
 
 //==============================================================================

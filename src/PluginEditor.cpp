@@ -208,6 +208,7 @@ BandsPage::BandsPage()
     styleKnob (*this, midFromS,   midFromL,   "FROM");
     styleKnob (*this, midToS,     midToL,     "TO");
     styleKnob (*this, midGainS,   midGainL,   "GAIN");
+    styleKnob (*this, midDriveS,  midDriveL,  "DRIVE");
     styleKnob (*this, highFreqS,  highFreqL,  "FROM");
     styleKnob (*this, driveS,     driveL,     "DRIVE");
     styleKnob (*this, toneS,      toneL,      "TONE");
@@ -224,6 +225,14 @@ BandsPage::BandsPage()
     addAndMakeVisible (lowOnT);
     addAndMakeVisible (midOnT);
     addAndMakeVisible (highOnT);
+
+    midCharBox.addItemList ({ "Tube", "Rodent", "Fuzz", "Doom", "X" }, 1);
+    addAndMakeVisible (midCharBox);
+    midCharL.setText ("CHARACTER", juce::dontSendNotification);
+    midCharL.setJustificationType (juce::Justification::centred);
+    midCharL.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    midCharL.setColour (juce::Label::textColourId, juce::Colour (0xff909098));
+    addAndMakeVisible (midCharL);
 }
 
 void BandsPage::paint (juce::Graphics& g)
@@ -256,9 +265,13 @@ void BandsPage::resized()
     place (lowLevelS, lowLevelL, 122, 138);
 
     // colonna MID (227..454)
-    place (midFromS, midFromL, 253,  30);
-    place (midToS,   midToL,   349,  30);
-    place (midGainS, midGainL, 301, 138);
+    place (midFromS,  midFromL,  253,  30);
+    place (midToS,    midToL,    349,  30);
+    place (midGainS,  midGainL,  253, 138);
+    place (midDriveS, midDriveL, 349, 138);
+
+    midCharL.setBounds   (301, 232, 100, labelH);
+    midCharBox.setBounds (301, 250, 100, 26);
 
     // colonna HIGH (454..680)
     place (highFreqS,  highFreqL,  480,  30);
@@ -446,6 +459,10 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
             });
     };
 
+    // --- reset ---
+    addAndMakeVisible (resetB);
+    resetB.onClick = [this] { processor.resetToDefaults(); };
+
     // --- tuner ---
     addAndMakeVisible (tunerToggle);
     addAndMakeVisible (tuner);
@@ -468,6 +485,7 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     attach (bandsPage.midFromS,   "midfrom");
     attach (bandsPage.midToS,     "midto");
     attach (bandsPage.midGainS,   "midgain");
+    attach (bandsPage.midDriveS,  "middrive");
     attach (bandsPage.highFreqS,  "highfreq");
     attach (bandsPage.driveS,     "drive");
     attach (bandsPage.toneS,      "tone");
@@ -483,6 +501,7 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     attach (eqPage.hiGainS,       "eqhigain");
 
     characterAttachment = std::make_unique<ComboAttachment> (vts, "character", bandsPage.characterBox);
+    midCharAttachment   = std::make_unique<ComboAttachment> (vts, "midchar", bandsPage.midCharBox);
     cabAttachment       = std::make_unique<ComboAttachment> (vts, "cab", cabPage.cabBox);
     tunerAttachment     = std::make_unique<ButtonAttachment> (vts, "tuneron", tunerToggle);
     lowOnAttachment     = std::make_unique<ButtonAttachment> (vts, "lowon",  bandsPage.lowOnT);
@@ -545,9 +564,10 @@ void ParallaxStyleEditor::resized()
         s.setBounds (x, y + labelH, knobW, knobH);
     };
 
-    // --- preset in alto a destra ---
-    presetSaveB.setBounds (540, 8, 72, 24);
-    presetLoadB.setBounds (620, 8, 72, 24);
+    // --- preset + reset in alto a destra ---
+    presetSaveB.setBounds (472, 8, 68, 24);
+    presetLoadB.setBounds (546, 8, 68, 24);
+    resetB.setBounds      (620, 8, 72, 24);
 
     // --- top bar: INPUT GATE + meter IN | BLEND | meter OUT + OUTPUT ---
     place (inputS,  inputL,   30, 52);
