@@ -150,8 +150,12 @@ private:
 class BandsPage : public juce::Component
 {
 public:
-    juce::Slider compS, lowSatS, xoverS, lowLevelS, driveS, toneS, highLevelS;
-    juce::Label  compL, lowSatL, xoverL, lowLevelL, driveL, toneL, highLevelL;
+    juce::Slider lowFreqS, compS, lowSatS, lowLevelS;
+    juce::Label  lowFreqL, compL, lowSatL, lowLevelL;
+    juce::Slider midFromS, midToS, midGainS;
+    juce::Label  midFromL, midToL, midGainL;
+    juce::Slider highFreqS, driveS, toneS, highLevelS;
+    juce::Label  highFreqL, driveL, toneL, highLevelL;
     juce::ComboBox characterBox;
     juce::Label characterL;
 
@@ -206,6 +210,9 @@ private:
     BandsPage bandsPage;
     CabPage cabPage;
     std::unique_ptr<juce::FileChooser> fileChooser;
+
+    // Preset
+    juce::TextButton presetSaveB { "SAVE" }, presetLoadB { "LOAD" };
 
     // Tuner (sempre visibile, abilitabile)
     juce::ToggleButton tunerToggle { "TUNER" };

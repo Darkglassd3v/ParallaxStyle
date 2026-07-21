@@ -43,6 +43,10 @@ public:
     void loadIR (const juce::File& file);
     juce::File getIRFile() const;
 
+    // Preset su file (XML, stesso formato dello stato di sessione)
+    bool savePreset (const juce::File& file);
+    bool loadPreset (const juce::File& file);
+
     // Tuner
     int readTunerSamples (float* dest, int maxSamples);
     double getTunerSampleRate() const noexcept { return tunerSampleRate; }
@@ -62,9 +66,12 @@ private:
     juce::dsp::NoiseGate<float> gate;
 
     juce::dsp::LinkwitzRileyFilter<float> lowpass, highpass;
+    juce::dsp::LinkwitzRileyFilter<float> midHighpass, midLowpass;
 
     juce::dsp::Compressor<float> compressor;
     juce::dsp::Gain<float> lowGain;
+
+    juce::dsp::Gain<float> midGain;
 
     juce::dsp::Gain<float> driveGain;
     juce::dsp::FirstOrderTPTFilter<float> toneFilter;
@@ -77,7 +84,7 @@ private:
     juce::dsp::Gain<float> outputGain;
     juce::dsp::DryWetMixer<float> dryWet;
 
-    juce::AudioBuffer<float> lowBuffer, highBuffer;
+    juce::AudioBuffer<float> lowBuffer, midBuffer, highBuffer;
 
     // Meters
     std::atomic<float> inputPeak  { 0.0f };
@@ -94,7 +101,11 @@ private:
 
     std::atomic<float>* pInput    = nullptr;
     std::atomic<float>* pGate     = nullptr;
-    std::atomic<float>* pXover    = nullptr;
+    std::atomic<float>* pLowFreq  = nullptr;
+    std::atomic<float>* pMidFrom  = nullptr;
+    std::atomic<float>* pMidTo    = nullptr;
+    std::atomic<float>* pMidGain  = nullptr;
+    std::atomic<float>* pHighFreq = nullptr;
     std::atomic<float>* pComp     = nullptr;
     std::atomic<float>* pLowSat   = nullptr;
     std::atomic<float>* pLowLevel = nullptr;

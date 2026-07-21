@@ -201,10 +201,14 @@ void TunerComponent::paint (juce::Graphics& g)
 //==============================================================================
 BandsPage::BandsPage()
 {
+    styleKnob (*this, lowFreqS,   lowFreqL,   "FREQ");
     styleKnob (*this, compS,      compL,      "COMP");
     styleKnob (*this, lowSatS,    lowSatL,    "SAT");
-    styleKnob (*this, xoverS,     xoverL,     "XOVER");
     styleKnob (*this, lowLevelS,  lowLevelL,  "LEVEL");
+    styleKnob (*this, midFromS,   midFromL,   "FROM");
+    styleKnob (*this, midToS,     midToL,     "TO");
+    styleKnob (*this, midGainS,   midGainL,   "GAIN");
+    styleKnob (*this, highFreqS,  highFreqL,  "FROM");
     styleKnob (*this, driveS,     driveL,     "DRIVE");
     styleKnob (*this, toneS,      toneL,      "TONE");
     styleKnob (*this, highLevelS, highLevelL, "LEVEL");
@@ -222,11 +226,13 @@ void BandsPage::paint (juce::Graphics& g)
 {
     g.setColour (juce::Colour (0xff707078));
     g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.drawText ("LOW BAND",  16, 8,  200, 16, juce::Justification::left);
-    g.drawText ("HIGH BAND", 16, 116, 200, 16, juce::Justification::left);
+    g.drawText ("LOW · COMP",   16, 8, 200, 16, juce::Justification::left);
+    g.drawText ("MID · EQ",    243, 8, 200, 16, juce::Justification::left);
+    g.drawText ("HIGH · DIST", 470, 8, 200, 16, juce::Justification::left);
 
     g.setColour (juce::Colour (0xff34343c));
-    g.fillRect (12, 110, getWidth() - 24, 1);
+    g.fillRect (227, 8, 1, getHeight() - 16);
+    g.fillRect (454, 8, 1, getHeight() - 16);
 }
 
 void BandsPage::resized()
@@ -239,19 +245,25 @@ void BandsPage::resized()
         s.setBounds (x, y + labelH, knobW, knobH);
     };
 
-    // riga LOW
-    place (compS,     compL,      30, 26);
-    place (lowSatS,   lowSatL,   190, 26);
-    place (xoverS,    xoverL,    350, 26);
-    place (lowLevelS, lowLevelL, 510, 26);
+    // colonna LOW (0..227)
+    place (lowFreqS,  lowFreqL,   26,  30);
+    place (compS,     compL,     122,  30);
+    place (lowSatS,   lowSatL,    26, 138);
+    place (lowLevelS, lowLevelL, 122, 138);
 
-    // riga HIGH
-    place (driveS,     driveL,     30, 134);
-    place (toneS,      toneL,     190, 134);
-    place (highLevelS, highLevelL, 510, 134);
+    // colonna MID (227..454)
+    place (midFromS, midFromL, 253,  30);
+    place (midToS,   midToL,   349,  30);
+    place (midGainS, midGainL, 301, 138);
 
-    characterL.setBounds   (350, 150, 100, labelH);
-    characterBox.setBounds (350, 170, 100, 26);
+    // colonna HIGH (454..680)
+    place (highFreqS,  highFreqL,  480,  30);
+    place (driveS,     driveL,     576,  30);
+    place (toneS,      toneL,      480, 138);
+    place (highLevelS, highLevelL, 576, 138);
+
+    characterL.setBounds   (480, 232, 100, labelH);
+    characterBox.setBounds (480, 250, 100, 26);
 }
 
 //==============================================================================
@@ -332,6 +344,45 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
             });
     };
 
+    // --- preset save/load ---
+    addAndMakeVisible (presetSaveB);
+    addAndMakeVisible (presetLoadB);
+
+    const auto presetDir = juce::File::getSpecialLocation (
+                               juce::File::userDocumentsDirectory)
+                               .getChildFile ("ParallaxStyle");
+
+    presetSaveB.onClick = [this, presetDir]
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Salva preset", presetDir.getChildFile ("preset.pllx"), "*.pllx");
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::saveMode
+                                    | juce::FileBrowserComponent::canSelectFiles
+                                    | juce::FileBrowserComponent::warnAboutOverwriting,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto file = fc.getResult();
+                if (file != juce::File())
+                    processor.savePreset (file.withFileExtension ("pllx"));
+            });
+    };
+
+    presetLoadB.onClick = [this, presetDir]
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Carica preset", presetDir, "*.pllx;*.xml");
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode
+                                    | juce::FileBrowserComponent::canSelectFiles,
+            [this] (const juce::FileChooser& fc)
+            {
+                const auto file = fc.getResult();
+                if (file.existsAsFile())
+                    processor.loadPreset (file);
+            });
+    };
+
     // --- tuner ---
     addAndMakeVisible (tunerToggle);
     addAndMakeVisible (tuner);
@@ -347,10 +398,14 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     attach (gateS,                "gate");
     attach (blendS,               "blend");
     attach (outputS,              "output");
+    attach (bandsPage.lowFreqS,   "lowfreq");
     attach (bandsPage.compS,      "comp");
     attach (bandsPage.lowSatS,    "lowsat");
-    attach (bandsPage.xoverS,     "xover");
     attach (bandsPage.lowLevelS,  "lowlevel");
+    attach (bandsPage.midFromS,   "midfrom");
+    attach (bandsPage.midToS,     "midto");
+    attach (bandsPage.midGainS,   "midgain");
+    attach (bandsPage.highFreqS,  "highfreq");
     attach (bandsPage.driveS,     "drive");
     attach (bandsPage.toneS,      "tone");
     attach (bandsPage.highLevelS, "highlevel");
@@ -360,7 +415,7 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     tunerAttachment     = std::make_unique<ButtonAttachment> (vts, "tuneron", tunerToggle);
 
     startTimerHz (30);
-    setSize (720, 560);
+    setSize (720, 640);
 }
 
 ParallaxStyleEditor::~ParallaxStyleEditor()
@@ -402,7 +457,7 @@ void ParallaxStyleEditor::paint (juce::Graphics& g)
     };
 
     drawPanel ({ 20,  40, 680, 128 });   // top bar
-    drawPanel ({ 20, 428, 680, 116 });   // tuner
+    drawPanel ({ 20, 508, 680, 116 });   // tuner
 }
 
 void ParallaxStyleEditor::resized()
@@ -414,6 +469,10 @@ void ParallaxStyleEditor::resized()
         l.setBounds (x, y, knobW, labelH);
         s.setBounds (x, y + labelH, knobW, knobH);
     };
+
+    // --- preset in alto a destra ---
+    presetSaveB.setBounds (540, 8, 72, 24);
+    presetLoadB.setBounds (620, 8, 72, 24);
 
     // --- top bar: INPUT GATE + meter IN | BLEND | meter OUT + OUTPUT ---
     place (inputS,  inputL,   30, 52);
@@ -427,9 +486,9 @@ void ParallaxStyleEditor::resized()
     outMeter.setBounds  (408,  92, 120, 16);
 
     // --- tab centrale ---
-    tabs.setBounds (20, 178, 680, 240);
+    tabs.setBounds (20, 178, 680, 320);
 
     // --- tuner ---
-    tunerToggle.setBounds (36, 470, 90, 24);
-    tuner.setBounds (200, 440, 320, 96);
+    tunerToggle.setBounds (36, 550, 90, 24);
+    tuner.setBounds (200, 520, 320, 96);
 }

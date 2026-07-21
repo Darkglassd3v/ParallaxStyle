@@ -31,7 +31,11 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
 {
     pInput     = apvts.getRawParameterValue ("input");
     pGate      = apvts.getRawParameterValue ("gate");
-    pXover     = apvts.getRawParameterValue ("xover");
+    pLowFreq   = apvts.getRawParameterValue ("lowfreq");
+    pMidFrom   = apvts.getRawParameterValue ("midfrom");
+    pMidTo     = apvts.getRawParameterValue ("midto");
+    pMidGain   = apvts.getRawParameterValue ("midgain");
+    pHighFreq  = apvts.getRawParameterValue ("highfreq");
     pComp      = apvts.getRawParameterValue ("comp");
     pLowSat    = apvts.getRawParameterValue ("lowsat");
     pLowLevel  = apvts.getRawParameterValue ("lowlevel");
@@ -58,8 +62,23 @@ ParallaxStyleProcessor::createParameterLayout()
     params.push_back (std::make_unique<P> (juce::ParameterID { "gate", 1 },
         "Gate", juce::NormalisableRange<float> (-80.0f, -20.0f, 0.1f), -80.0f));
 
-    params.push_back (std::make_unique<P> (juce::ParameterID { "xover", 1 },
-        "Crossover", juce::NormalisableRange<float> (80.0f, 1000.0f, 1.0f, 0.4f), 250.0f));
+    // LOW: comprimi fino a...
+    params.push_back (std::make_unique<P> (juce::ParameterID { "lowfreq", 1 },
+        "Low Freq", juce::NormalisableRange<float> (60.0f, 500.0f, 1.0f, 0.5f), 200.0f));
+
+    // MID: banda da boostare/attenuare
+    params.push_back (std::make_unique<P> (juce::ParameterID { "midfrom", 1 },
+        "Mid From", juce::NormalisableRange<float> (80.0f, 1000.0f, 1.0f, 0.5f), 200.0f));
+
+    params.push_back (std::make_unique<P> (juce::ParameterID { "midto", 1 },
+        "Mid To", juce::NormalisableRange<float> (200.0f, 5000.0f, 1.0f, 0.5f), 600.0f));
+
+    params.push_back (std::make_unique<P> (juce::ParameterID { "midgain", 1 },
+        "Mid Gain", juce::NormalisableRange<float> (-18.0f, 18.0f, 0.1f), 0.0f));
+
+    // HIGH: distorci da... in su
+    params.push_back (std::make_unique<P> (juce::ParameterID { "highfreq", 1 },
+        "High Freq", juce::NormalisableRange<float> (200.0f, 2000.0f, 1.0f, 0.5f), 400.0f));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "comp", 1 },
         "Low Comp", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.4f));
@@ -121,6 +140,15 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     highpass.prepare (spec);
     highpass.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
 
+    midHighpass.prepare (spec);
+    midHighpass.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
+
+    midLowpass.prepare (spec);
+    midLowpass.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
+
+    midGain.prepare (spec);
+    midGain.setRampDurationSeconds (0.02);
+
     compressor.prepare (spec);
     compressor.setAttack (10.0f);
     compressor.setRelease (120.0f);
@@ -147,6 +175,7 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     dryWet.setMixingRule (juce::dsp::DryWetMixingRule::linear);
 
     lowBuffer.setSize  ((int) spec.numChannels, samplesPerBlock);
+    midBuffer.setSize  ((int) spec.numChannels, samplesPerBlock);
     highBuffer.setSize ((int) spec.numChannels, samplesPerBlock);
 
     tunerSampleRate = sampleRate / (double) tunerDecimation;
@@ -225,7 +254,10 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const int numSamples  = buffer.getNumSamples();
 
     // --- parametri ---
-    const float xover     = pXover->load();
+    const float lowFreq   = pLowFreq->load();
+    const float midFrom   = pMidFrom->load();
+    const float midTo     = juce::jmax (pMidTo->load(), midFrom + 1.0f);  // banda mai invertita
+    const float highFreq  = pHighFreq->load();
     const float comp      = pComp->load();
     const float lowSat    = pLowSat->load();
     const int   character = (int) pCharacter->load();
@@ -234,10 +266,13 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     inputGain.setGainDecibels (pInput->load());
     gate.setThreshold (pGate->load());
-    lowpass.setCutoffFrequency  (xover);
-    highpass.setCutoffFrequency (xover);
+    lowpass.setCutoffFrequency     (lowFreq);
+    midHighpass.setCutoffFrequency (midFrom);
+    midLowpass.setCutoffFrequency  (midTo);
+    highpass.setCutoffFrequency    (highFreq);
     compressor.setThreshold (juce::jmap (comp, 0.0f, 1.0f, 0.0f, -36.0f));
     lowGain.setGainDecibels  (pLowLevel->load());
+    midGain.setGainDecibels  (pMidGain->load());
     driveGain.setGainDecibels (pDrive->load());
     toneFilter.setCutoffFrequency (pTone->load());
     highGain.setGainDecibels (pHighLevel->load());
@@ -258,23 +293,32 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // --- dry tap ---
     dryWet.pushDrySamples (mainBlock);
 
-    // --- split ---
+    // --- split nei tre tap paralleli ---
     for (int ch = 0; ch < numChannels; ++ch)
     {
         lowBuffer.copyFrom  (ch, 0, buffer, ch, 0, numSamples);
+        midBuffer.copyFrom  (ch, 0, buffer, ch, 0, numSamples);
         highBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
     }
 
     juce::dsp::AudioBlock<float> lowBlock  (lowBuffer.getArrayOfWritePointers(),
                                             (size_t) numChannels, (size_t) numSamples);
+    juce::dsp::AudioBlock<float> midBlock  (midBuffer.getArrayOfWritePointers(),
+                                            (size_t) numChannels, (size_t) numSamples);
     juce::dsp::AudioBlock<float> highBlock (highBuffer.getArrayOfWritePointers(),
                                             (size_t) numChannels, (size_t) numSamples);
 
     juce::dsp::ProcessContextReplacing<float> lowCtx  (lowBlock);
+    juce::dsp::ProcessContextReplacing<float> midCtx  (midBlock);
     juce::dsp::ProcessContextReplacing<float> highCtx (highBlock);
 
     lowpass.process  (lowCtx);
+    midHighpass.process (midCtx);
+    midLowpass.process  (midCtx);
     highpass.process (highCtx);
+
+    // --- MID BAND: boost/cut pulito ---
+    midGain.process (midCtx);
 
     // --- LOW BAND ---
     compressor.process (lowCtx);
@@ -317,10 +361,11 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     highGain.process (highCtx);
 
-    // --- somma ---
+    // --- somma dei tre tap ---
     for (int ch = 0; ch < numChannels; ++ch)
     {
         buffer.copyFrom (ch, 0, lowBuffer,  ch, 0, numSamples);
+        buffer.addFrom  (ch, 0, midBuffer,  ch, 0, numSamples);
         buffer.addFrom  (ch, 0, highBuffer, ch, 0, numSamples);
     }
 
@@ -354,6 +399,41 @@ juce::File ParallaxStyleProcessor::getIRFile() const
 {
     const juce::ScopedLock sl (irPathLock);
     return irPath.isNotEmpty() ? juce::File (irPath) : juce::File();
+}
+
+//==============================================================================
+bool ParallaxStyleProcessor::savePreset (const juce::File& file)
+{
+    auto state = apvts.copyState();
+    {
+        const juce::ScopedLock sl (irPathLock);
+        state.setProperty ("irPath", irPath, nullptr);
+    }
+
+    if (auto xml = state.createXml())
+    {
+        file.getParentDirectory().createDirectory();
+        return xml->writeTo (file);
+    }
+    return false;
+}
+
+bool ParallaxStyleProcessor::loadPreset (const juce::File& file)
+{
+    if (auto xml = juce::parseXML (file))
+    {
+        if (xml->hasTagName (apvts.state.getType()))
+        {
+            auto state = juce::ValueTree::fromXml (*xml);
+            const juce::String savedPath = state.getProperty ("irPath", "").toString();
+            apvts.replaceState (state);
+
+            if (savedPath.isNotEmpty())
+                loadIR (juce::File (savedPath));
+            return true;
+        }
+    }
+    return false;
 }
 
 //==============================================================================
