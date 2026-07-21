@@ -4,13 +4,11 @@
 #include <juce_dsp/juce_dsp.h>
 
 //==============================================================================
-// ParallaxStyle v1.1 — parallel bass processor
+// ParallaxStyle v1.2 — parallel bass processor
 //
-//   input ──┬── LR4 LP ─► Comp ─► Soft Sat ─► Low Level ──────────────┐
-//           │                                                          ├─► Σ ─► [Cab IR: Full] ─► Output ─► Blend
-//           └── LR4 HP ─► Drive ─► Shaper ─► Tone ─► [Cab IR: High] ─► Hi Level ─┘
-//
-//   + tuner tap sull'input (mono, decimato 4x, FIFO lock-free verso la GUI)
+//   input ─► Input Gain ──┬── LR4 LP ─► Comp ─► Sat ─► Low Lvl ──────────────┐
+//        (meter in, tuner)│                                                   ├─► Σ ─► [IR: Full] ─► Output ─► Blend ─► (meter out)
+//                         └── LR4 HP ─► Drive ─► Shaper ─► Tone ─► [IR: High] ─► Hi Lvl ─┘
 //==============================================================================
 class ParallaxStyleProcessor : public juce::AudioProcessor
 {
@@ -18,13 +16,11 @@ public:
     ParallaxStyleProcessor();
     ~ParallaxStyleProcessor() override = default;
 
-    //==========================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
-    //==========================================================================
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override                       { return true; }
 
@@ -40,51 +36,78 @@ public:
     const juce::String getProgramName (int) override      { return {}; }
     void changeProgramName (int, const juce::String&) override {}
 
-    //==========================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    //==========================================================================
     // Cab IR
     void loadIR (const juce::File& file);
     juce::File getIRFile() const;
 
-    //==========================================================================
-    // Tuner: la GUI legge i campioni decimati dal FIFO
+    // Preset su file (XML, stesso formato dello stato di sessione)
+    bool savePreset (const juce::File& file);
+    bool loadPreset (const juce::File& file);
+
+    // Tuner
     int readTunerSamples (float* dest, int maxSamples);
     double getTunerSampleRate() const noexcept { return tunerSampleRate; }
 
-    //==========================================================================
+    // Meters: la GUI legge e resetta il picco accumulato (linear gain)
+    float consumeInputPeak()  noexcept { return inputPeak.exchange (0.0f); }
+    float consumeOutputPeak() noexcept { return outputPeak.exchange (0.0f); }
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void pushTunerSamples (const juce::AudioBuffer<float>& input);
+    static void accumulatePeak (std::atomic<float>& target, const juce::AudioBuffer<float>& buf);
 
-    // Crossover Linkwitz-Riley 4° ordine
+    juce::dsp::Gain<float> inputGain;
+
+    // Hard gate custom: sotto soglia il segnale viene azzerato.
+    // Isteresi 6 dB + hold per evitare chattering sul decay.
+    float gateEnvelope   = 0.0f;
+    float gateGainState  = 1.0f;
+    int   gateHoldCount  = 0;
+    int   gateHoldSamples = 0;
+    float gateEnvCoeff = 0.0f, gateOpenCoeff = 0.0f, gateCloseCoeff = 0.0f;
+    bool  gateIsOpen = true;
+
     juce::dsp::LinkwitzRileyFilter<float> lowpass, highpass;
+    juce::dsp::LinkwitzRileyFilter<float> midHighpass, midLowpass;
 
-    // Banda bassa
     juce::dsp::Compressor<float> compressor;
     juce::dsp::Gain<float> lowGain;
 
-    // Banda alta
+    juce::dsp::Gain<float> midGain;
+
     juce::dsp::Gain<float> driveGain;
     juce::dsp::FirstOrderTPTFilter<float> toneFilter;
     juce::dsp::Gain<float> highGain;
 
-    // Cab sim (zero-latency uniform partitioned convolution)
     juce::dsp::Convolution convolution;
+    juce::dsp::Gain<float> cabGain;
     juce::CriticalSection irPathLock;
     juce::String irPath;
 
-    // Master
     juce::dsp::Gain<float> outputGain;
     juce::dsp::DryWetMixer<float> dryWet;
 
-    juce::AudioBuffer<float> lowBuffer, highBuffer;
+    // EQ post 4 bande (low shelf, 2 peak, high shelf) sul mix globale
+    using StereoIIR = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+                                                     juce::dsp::IIR::Coefficients<float>>;
+    StereoIIR eqLo, eqM1, eqM2, eqHi;
+    double currentSampleRate = 48000.0;
+    float eqCache[8] = { -1e9f, -1e9f, -1e9f, -1e9f, -1e9f, -1e9f, -1e9f, -1e9f };
+    void updateEqCoefficients();
 
-    // Tuner FIFO (audio thread -> GUI thread, lock-free)
+    juce::AudioBuffer<float> lowBuffer, midBuffer, highBuffer;
+
+    // Meters
+    std::atomic<float> inputPeak  { 0.0f };
+    std::atomic<float> outputPeak { 0.0f };
+
+    // Tuner FIFO
     static constexpr int tunerFifoSize = 8192;
     static constexpr int tunerDecimation = 4;
     juce::AbstractFifo tunerFifo { tunerFifoSize };
@@ -93,8 +116,13 @@ private:
     int   decimCount = 0;
     double tunerSampleRate = 12000.0;
 
-    // Parametri (puntatori atomici, no string lookup in audio thread)
-    std::atomic<float>* pXover    = nullptr;
+    std::atomic<float>* pInput    = nullptr;
+    std::atomic<float>* pGate     = nullptr;
+    std::atomic<float>* pLowFreq  = nullptr;
+    std::atomic<float>* pMidFrom  = nullptr;
+    std::atomic<float>* pMidTo    = nullptr;
+    std::atomic<float>* pMidGain  = nullptr;
+    std::atomic<float>* pHighFreq = nullptr;
     std::atomic<float>* pComp     = nullptr;
     std::atomic<float>* pLowSat   = nullptr;
     std::atomic<float>* pLowLevel = nullptr;
@@ -102,9 +130,22 @@ private:
     std::atomic<float>* pCharacter= nullptr;
     std::atomic<float>* pTone     = nullptr;
     std::atomic<float>* pHighLevel= nullptr;
-    std::atomic<float>* pCab      = nullptr;   // 0=Off 1=High 2=Full
+    std::atomic<float>* pCab      = nullptr;
+    std::atomic<float>* pCabLevel = nullptr;
     std::atomic<float>* pBlend    = nullptr;
     std::atomic<float>* pOutput   = nullptr;
+    std::atomic<float>* pTunerOn  = nullptr;
+    std::atomic<float>* pLowOn    = nullptr;
+    std::atomic<float>* pMidOn    = nullptr;
+    std::atomic<float>* pHighOn   = nullptr;
+    std::atomic<float>* pEqLoF    = nullptr;
+    std::atomic<float>* pEqLoG    = nullptr;
+    std::atomic<float>* pEqM1F    = nullptr;
+    std::atomic<float>* pEqM1G    = nullptr;
+    std::atomic<float>* pEqM2F    = nullptr;
+    std::atomic<float>* pEqM2G    = nullptr;
+    std::atomic<float>* pEqHiF    = nullptr;
+    std::atomic<float>* pEqHiG    = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParallaxStyleProcessor)
 };

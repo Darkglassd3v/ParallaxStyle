@@ -3,7 +3,11 @@ name: Build
 on:
   push:
     branches: [ main ]
+    tags: [ "v*" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -44,20 +48,109 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - name: Upload VST3
+      - name: Package binaries
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          cat > info.txt << INFO
+          ParallaxStyle ${VERSION}
+          platform: ${{ matrix.name }}
+          commit:   ${GITHUB_SHA}
+          built:    $(date -u +"%Y-%m-%d %H:%M UTC")
+          repo:     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+          INFO
+
+          # --- script di installazione/aggiornamento per piattaforma ---
+          case "${{ matrix.name }}" in
+            windows)
+              cat > install.bat << 'BAT'
+          @echo off
+          rem ParallaxStyle - installa/aggiorna il VST3 (eseguire come amministratore)
+          net session >nul 2>&1
+          if %errorLevel% neq 0 (
+              echo Esegui questo script come amministratore ^(tasto destro - Esegui come amministratore^)
+              pause
+              exit /b 1
+          )
+          set "DEST=%CommonProgramFiles%\VST3\ParallaxStyle.vst3"
+          if exist "%DEST%" rmdir /s /q "%DEST%"
+          xcopy /E /I /Y "%~dp0VST3\ParallaxStyle.vst3" "%DEST%" >nul
+          echo Installato/aggiornato in: %DEST%
+          echo Riavvia la DAW e riscansiona i plugin.
+          pause
+          BAT
+              SCRIPT=install.bat
+              ;;
+            macos)
+              cat > install.sh << 'SH'
+          #!/bin/bash
+          # ParallaxStyle - installa/aggiorna il VST3 (eseguire: bash install.sh)
+          set -e
+          DEST="$HOME/Library/Audio/Plug-Ins/VST3"
+          SRC="$(cd "$(dirname "$0")" && pwd)/VST3/ParallaxStyle.vst3"
+          mkdir -p "$DEST"
+          rm -rf "$DEST/ParallaxStyle.vst3"
+          cp -R "$SRC" "$DEST/"
+          xattr -cr "$DEST/ParallaxStyle.vst3" 2>/dev/null || true
+          echo "Installato/aggiornato in: $DEST"
+          echo "Riavvia la DAW e riscansiona i plugin."
+          SH
+              SCRIPT=install.sh
+              ;;
+            linux)
+              cat > install.sh << 'SH'
+          #!/bin/bash
+          # ParallaxStyle - installa/aggiorna il VST3 (eseguire: bash install.sh)
+          set -e
+          DEST="$HOME/.vst3"
+          SRC="$(cd "$(dirname "$0")" && pwd)/VST3/ParallaxStyle.vst3"
+          mkdir -p "$DEST"
+          rm -rf "$DEST/ParallaxStyle.vst3"
+          cp -R "$SRC" "$DEST/"
+          echo "Installato/aggiornato in: $DEST"
+          echo "Riavvia la DAW e riscansiona i plugin."
+          SH
+              SCRIPT=install.sh
+              ;;
+          esac
+
+          mkdir -p dist
+          cd build/ParallaxStyle_artefacts
+          SRC_DIR=.
+          [ -d Release ] && SRC_DIR=Release
+          cd "$SRC_DIR"
+          cp "$GITHUB_WORKSPACE/info.txt" .
+          cp "$GITHUB_WORKSPACE/$SCRIPT" .
+          7z a "$GITHUB_WORKSPACE/dist/ParallaxStyle-${VERSION}-${{ matrix.name }}-vst3.zip" VST3/ info.txt "$SCRIPT"
+          7z a "$GITHUB_WORKSPACE/dist/ParallaxStyle-${VERSION}-${{ matrix.name }}-standalone.zip" Standalone/ info.txt
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ParallaxStyle-${{ matrix.name }}-vst3
-          path: |
-            build/ParallaxStyle_artefacts/Release/VST3/
-            build/ParallaxStyle_artefacts/VST3/
+          name: ParallaxStyle-${{ matrix.name }}
+          path: dist/*.zip
           if-no-files-found: error
 
-      - name: Upload Standalone
-        uses: actions/upload-artifact@v4
+  release:
+    name: Create release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: ParallaxStyle-${{ matrix.name }}-standalone
-          path: |
-            build/ParallaxStyle_artefacts/Release/Standalone/
-            build/ParallaxStyle_artefacts/Standalone/
-          if-no-files-found: error
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
