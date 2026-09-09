@@ -22,7 +22,7 @@ public:
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override                       { return true; }
+    bool hasEditor() const override                       { return ! PARALLAXSTYLE_ANAGRAM_BUILD; }
 
     const juce::String getName() const override           { return "ParallaxStyle"; }
     bool acceptsMidi() const override                     { return false; }
@@ -39,9 +39,18 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Cab IR
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    // Anagram richiede una lv2:enabled ControlPort per il bypass smooth
+    // gestito dall'host (mod-host): esposta qui come parametro dedicato.
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
+#endif
+
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    // Cab IR (non disponibile su Anagram: il caricamento IR custom sarà un
+    // blocco Anagram a parte, es. Cabinet Loader)
     void loadIR (const juce::File& file);
     juce::File getIRFile() const;
+#endif
 
     // Preset su file (XML, stesso formato dello stato di sessione)
     bool savePreset (const juce::File& file);
@@ -50,9 +59,11 @@ public:
     // Riporta tutti i parametri ai valori di default
     void resetToDefaults();
 
-    // Tuner
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    // Tuner (non disponibile su Anagram: nessun display, non serve)
     int readTunerSamples (float* dest, int maxSamples);
     double getTunerSampleRate() const noexcept { return tunerSampleRate; }
+#endif
 
     // Meters: la GUI legge e resetta il picco accumulato (linear gain)
     float consumeInputPeak()  noexcept { return inputPeak.exchange (0.0f); }
@@ -62,7 +73,12 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     void pushTunerSamples (const juce::AudioBuffer<float>& input);
+#endif
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    juce::RangedAudioParameter* bypassParam = nullptr;
+#endif
     static void accumulatePeak (std::atomic<float>& target, const juce::AudioBuffer<float>& buf);
 
     juce::dsp::Gain<float> inputGain;
@@ -88,10 +104,12 @@ private:
     juce::dsp::FirstOrderTPTFilter<float> toneFilter;
     juce::dsp::Gain<float> highGain;
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     juce::dsp::Convolution convolution;
     juce::dsp::Gain<float> cabGain;
     juce::CriticalSection irPathLock;
     juce::String irPath;
+#endif
 
     juce::dsp::Gain<float> outputGain;
     juce::dsp::DryWetMixer<float> dryWet;
@@ -110,6 +128,7 @@ private:
     std::atomic<float> inputPeak  { 0.0f };
     std::atomic<float> outputPeak { 0.0f };
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     // Tuner FIFO
     static constexpr int tunerFifoSize = 8192;
     static constexpr int tunerDecimation = 4;
@@ -118,6 +137,7 @@ private:
     float decimAccum = 0.0f;
     int   decimCount = 0;
     double tunerSampleRate = 12000.0;
+#endif
 
     std::atomic<float>* pInput    = nullptr;
     std::atomic<float>* pGate     = nullptr;
@@ -135,11 +155,15 @@ private:
     std::atomic<float>* pCharacter= nullptr;
     std::atomic<float>* pTone     = nullptr;
     std::atomic<float>* pHighLevel= nullptr;
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     std::atomic<float>* pCab      = nullptr;
     std::atomic<float>* pCabLevel = nullptr;
+#endif
     std::atomic<float>* pBlend    = nullptr;
     std::atomic<float>* pOutput   = nullptr;
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     std::atomic<float>* pTunerOn  = nullptr;
+#endif
     std::atomic<float>* pLowOn    = nullptr;
     std::atomic<float>* pMidOn    = nullptr;
     std::atomic<float>* pHighOn   = nullptr;

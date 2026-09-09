@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+ #include "PluginEditor.h"
+#endif
 
 //==============================================================================
 namespace
@@ -79,11 +81,15 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
     pCharacter = apvts.getRawParameterValue ("character");
     pTone      = apvts.getRawParameterValue ("tone");
     pHighLevel = apvts.getRawParameterValue ("highlevel");
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     pCab       = apvts.getRawParameterValue ("cab");
     pCabLevel  = apvts.getRawParameterValue ("cablevel");
+#endif
     pBlend     = apvts.getRawParameterValue ("blend");
     pOutput    = apvts.getRawParameterValue ("output");
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     pTunerOn   = apvts.getRawParameterValue ("tuneron");
+#endif
     pLowOn     = apvts.getRawParameterValue ("lowon");
     pMidOn     = apvts.getRawParameterValue ("midon");
     pHighOn    = apvts.getRawParameterValue ("highon");
@@ -95,6 +101,9 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
     pEqM2G     = apvts.getRawParameterValue ("eqm2gain");
     pEqHiF     = apvts.getRawParameterValue ("eqhifreq");
     pEqHiG     = apvts.getRawParameterValue ("eqhigain");
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    bypassParam = apvts.getParameter ("bypass");
+#endif
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -157,12 +166,14 @@ ParallaxStyleProcessor::createParameterLayout()
     params.push_back (std::make_unique<P> (juce::ParameterID { "highlevel", 1 },
         "High Level", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "cab", 1 }, "Cab IR",
         juce::StringArray { "Off", "High Band", "Full Mix" }, 0));
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "cablevel", 1 },
         "IR Level", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
+#endif
 
     params.push_back (std::make_unique<P> (juce::ParameterID { "blend", 1 },
         "Blend", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f));
@@ -191,8 +202,10 @@ ParallaxStyleProcessor::createParameterLayout()
     params.push_back (std::make_unique<P> (juce::ParameterID { "eqhigain", 1 },
         "EQ Hi Gain", juce::NormalisableRange<float> (-15.0f, 15.0f, 0.1f), 0.0f));
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "tuneron", 1 }, "Tuner", true));
+#endif
 
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "lowon", 1 }, "Low On", true));
@@ -200,6 +213,11 @@ ParallaxStyleProcessor::createParameterLayout()
         juce::ParameterID { "midon", 1 }, "Mid On", true));
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "highon", 1 }, "High On", true));
+
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "bypass", 1 }, "Bypass", false));
+#endif
 
     return { params.begin(), params.end() };
 }
@@ -257,10 +275,12 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     highGain.prepare (spec);
     highGain.setRampDurationSeconds (0.02);
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     convolution.prepare (spec);
 
     cabGain.prepare (spec);
     cabGain.setRampDurationSeconds (0.02);
+#endif
 
     outputGain.prepare (spec);
     outputGain.setRampDurationSeconds (0.02);
@@ -280,7 +300,9 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     midBuffer.setSize  ((int) spec.numChannels, samplesPerBlock);
     highBuffer.setSize ((int) spec.numChannels, samplesPerBlock);
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     tunerSampleRate = sampleRate / (double) tunerDecimation;
+#endif
 }
 
 bool ParallaxStyleProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -292,6 +314,7 @@ bool ParallaxStyleProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
 }
 
 //==============================================================================
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
 void ParallaxStyleProcessor::pushTunerSamples (const juce::AudioBuffer<float>& input)
 {
     const int numChannels = input.getNumChannels();
@@ -332,6 +355,7 @@ int ParallaxStyleProcessor::readTunerSamples (float* dest, int maxSamples)
     tunerFifo.finishedRead (size1 + size2);
     return size1 + size2;
 }
+#endif
 
 void ParallaxStyleProcessor::accumulatePeak (std::atomic<float>& target,
                                              const juce::AudioBuffer<float>& buf)
@@ -394,15 +418,19 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const float comp      = pComp->load();
     const float lowSat    = pLowSat->load();
     const int   character = (int) pCharacter->load();
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     const int   cabMode   = (int) pCab->load();
     const bool  tunerOn   = pTunerOn->load() > 0.5f;
+#endif
     const bool  lowOn     = pLowOn->load()  > 0.5f;
     const bool  midOn     = pMidOn->load()  > 0.5f;
     const bool  highOn    = pHighOn->load() > 0.5f;
 
     inputGain.setGainDecibels (pInput->load());
     const float gateThLin = juce::Decibels::decibelsToGain (pGate->load());
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     cabGain.setGainDecibels (pCabLevel->load());
+#endif
     lowpass.setCutoffFrequency     (lowFreq);
     midHighpass.setCutoffFrequency (midFrom);
     midLowpass.setCutoffFrequency  (midTo);
@@ -469,8 +497,10 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     accumulatePeak (inputPeak, buffer);
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     if (tunerOn)
         pushTunerSamples (buffer);
+#endif
 
     // --- dry tap ---
     dryWet.pushDrySamples (mainBlock);
@@ -561,11 +591,13 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         toneFilter.process (highCtx);
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
         if (cabMode == 1)
         {
             convolution.process (highCtx);
             cabGain.process (highCtx);
         }
+#endif
 
         highGain.process (highCtx);
     }
@@ -582,11 +614,13 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.addFrom  (ch, 0, highBuffer, ch, 0, numSamples);
     }
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     if (cabMode == 2)
     {
         convolution.process (mainCtx);
         cabGain.process (mainCtx);
     }
+#endif
 
     // --- EQ post sul mix globale ---
     updateEqCoefficients();
@@ -603,6 +637,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 }
 
 //==============================================================================
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
 void ParallaxStyleProcessor::loadIR (const juce::File& file)
 {
     if (! file.existsAsFile())
@@ -623,6 +658,7 @@ juce::File ParallaxStyleProcessor::getIRFile() const
     const juce::ScopedLock sl (irPathLock);
     return irPath.isNotEmpty() ? juce::File (irPath) : juce::File();
 }
+#endif
 
 //==============================================================================
 void ParallaxStyleProcessor::resetToDefaults()
@@ -636,10 +672,12 @@ void ParallaxStyleProcessor::resetToDefaults()
 bool ParallaxStyleProcessor::savePreset (const juce::File& file)
 {
     auto state = apvts.copyState();
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     {
         const juce::ScopedLock sl (irPathLock);
         state.setProperty ("irPath", irPath, nullptr);
     }
+#endif
 
     if (auto xml = state.createXml())
     {
@@ -656,11 +694,15 @@ bool ParallaxStyleProcessor::loadPreset (const juce::File& file)
         if (xml->hasTagName (apvts.state.getType()))
         {
             auto state = juce::ValueTree::fromXml (*xml);
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
             const juce::String savedPath = state.getProperty ("irPath", "").toString();
+#endif
             apvts.replaceState (state);
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
             if (savedPath.isNotEmpty())
                 loadIR (juce::File (savedPath));
+#endif
             return true;
         }
     }
@@ -671,10 +713,12 @@ bool ParallaxStyleProcessor::loadPreset (const juce::File& file)
 void ParallaxStyleProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
     {
         const juce::ScopedLock sl (irPathLock);
         state.setProperty ("irPath", irPath, nullptr);
     }
+#endif
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -686,11 +730,15 @@ void ParallaxStyleProcessor::setStateInformation (const void* data, int sizeInBy
         if (xml->hasTagName (apvts.state.getType()))
         {
             auto state = juce::ValueTree::fromXml (*xml);
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
             const juce::String savedPath = state.getProperty ("irPath", "").toString();
+#endif
             apvts.replaceState (state);
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
             if (savedPath.isNotEmpty())
                 loadIR (juce::File (savedPath));
+#endif
         }
     }
 }
@@ -698,7 +746,11 @@ void ParallaxStyleProcessor::setStateInformation (const void* data, int sizeInBy
 //==============================================================================
 juce::AudioProcessorEditor* ParallaxStyleProcessor::createEditor()
 {
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    return nullptr; // Anagram non ha display server: nessuna GUI JUCE per questo target.
+#else
     return new ParallaxStyleEditor (*this);
+#endif
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
