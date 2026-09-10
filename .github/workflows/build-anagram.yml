@@ -1,0 +1,118 @@
+name: Build Anagram
+
+# Build LV2 pesante e lenta (~1h, ~15GB) perché builda da zero il toolchain
+# di cross-compilazione ARM64 di Darkglass (crosstool-ng via
+# mod-plugin-builder), quindi NON gira su ogni push come build.yml: solo a
+# mano o sui tag di release.
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      toolchain_target:
+        description: "Target immagine docker Darkglass (vedi BUILDING-DOCKER.md)"
+        type: choice
+        options: [ full, minimal ]
+        default: full
+
+permissions:
+  contents: write
+
+jobs:
+  build-anagram:
+    name: anagram-lv2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL "$AGENT_TOOLSDIRECTORY" || true
+          docker image prune -af || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          path: ParallaxStyle
+
+      - name: Checkout Darkglass Plugin-Dev-Setup (solo docker/)
+        uses: actions/checkout@v4
+        with:
+          repository: Darkglass-Electronics/Plugin-Dev-Setup
+          sparse-checkout: |
+            docker
+          path: Plugin-Dev-Setup
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build/pull cached Anagram toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: Plugin-Dev-Setup/docker
+          tags: darkglass-anagram:latest
+          build-args: |
+            debug=false
+            target=${{ github.event.inputs.toolchain_target || 'full' }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cross-compile ParallaxStyle per Anagram
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/ParallaxStyle:/root/source" \
+            darkglass-anagram:latest \
+            bash -ic '
+              set -e
+              cmake -S /root/source -B /root/source/build-anagram -DTARGET_ANAGRAM=ON
+              $(which cmake) --build /root/source/build-anagram
+            '
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+
+          cat > info.txt << INFO
+          ParallaxStyle ${VERSION} - Darkglass Anagram (LV2)
+          commit:   ${GITHUB_SHA}
+          built:    $(date -u +"%Y-%m-%d %H:%M UTC")
+          repo:     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+
+          Deploy (unità in Developer Mode):
+            scp -O -r ParallaxStyle.lv2 root@192.168.51.1:/root/.lv2/
+            ssh root@192.168.51.1 "systemctl restart jack2 lvgl-app"
+          INFO
+
+          cd ParallaxStyle/build-anagram/ParallaxStyle_artefacts/LV2
+          cp "$GITHUB_WORKSPACE/info.txt" .
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          7z a "$GITHUB_WORKSPACE/dist/ParallaxStyle-${VERSION}-anagram-lv2.zip" ParallaxStyle.lv2/ info.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ParallaxStyle-anagram
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: build-anagram
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create/aggiorna GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
