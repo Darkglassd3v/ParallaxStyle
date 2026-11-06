@@ -63,6 +63,7 @@ endfunction()
 parallaxstyle_add_tests(ParallaxStyleTests 0
     ProcessorTests.cpp
     EditorTests.cpp
+    AnalyzerTests.cpp
     "${PROJECT_SOURCE_DIR}/src/PluginProcessor.cpp"
     "${PROJECT_SOURCE_DIR}/src/PluginEditor.cpp"
 )
