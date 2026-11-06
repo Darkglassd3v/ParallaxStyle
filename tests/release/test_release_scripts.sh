@@ -18,10 +18,11 @@ if bash "$ROOT/scripts/version.sh" "v0.0.1" > /dev/null 2>&1; then fail "tag v0.
 # --- packaging: a fake Linux build, as the artefacts folder of CMake looks
 V=9.9.9
 ART="$WORK/artefacts"
-mkdir -p "$ART/VST3/ParallaxStyle-$V.vst3/Contents/x86_64-linux" "$ART/Standalone"
-echo binary > "$ART/VST3/ParallaxStyle-$V.vst3/Contents/x86_64-linux/ParallaxStyle-$V.so"
-printf '#!/bin/sh\necho standalone\n' > "$ART/Standalone/ParallaxStyle-$V"
-chmod +x "$ART/Standalone/ParallaxStyle-$V"
+F=9_9_9   # CMake puts the version in file names with underscores
+mkdir -p "$ART/VST3/ParallaxStyle-$F.vst3/Contents/x86_64-linux" "$ART/Standalone"
+echo binary > "$ART/VST3/ParallaxStyle-$F.vst3/Contents/x86_64-linux/ParallaxStyle-$F.so"
+printf '#!/bin/sh\necho standalone\n' > "$ART/Standalone/ParallaxStyle-$F"
+chmod +x "$ART/Standalone/ParallaxStyle-$F"
 PDF="$WORK/ParallaxStyle-$V-Guida.pdf"
 printf '%%PDF-1.4 test\n' > "$PDF"
 
@@ -31,7 +32,7 @@ VST3_ZIP="$WORK/out/ParallaxStyle-$V-linux-vst3.zip"
 APP_ZIP="$WORK/out/ParallaxStyle-$V-linux-standalone.zip"
 [[ -f "$VST3_ZIP" ]] || fail "missing $VST3_ZIP"
 [[ -f "$APP_ZIP" ]]  || fail "missing $APP_ZIP"
-for entry in "ParallaxStyle-$V.vst3/" "ParallaxStyle-$V-Guida.pdf" "install.sh" "LEGGIMI.txt"; do
+for entry in "ParallaxStyle-$F.vst3/" "ParallaxStyle-$V-Guida.pdf" "install.sh" "LEGGIMI.txt"; do
     unzip -l "$VST3_ZIP" | grep -qF "$entry" || fail "$entry not in the VST3 zip"
 done
 for entry in "ParallaxStyle-$V" "ParallaxStyle-$V-Guida.pdf" "LEGGIMI.txt"; do
@@ -45,12 +46,12 @@ mkdir "$WORK/app" && (cd "$WORK/app" && unzip -q "$APP_ZIP")
 
 # --- install.sh replaces every older ParallaxStyle bundle and nothing else
 HOME_DIR="$WORK/home"
-mkdir -p "$HOME_DIR/.vst3/ParallaxStyle.vst3" "$HOME_DIR/.vst3/ParallaxStyle-1.8.0.vst3" "$HOME_DIR/.vst3/OtherPlugin.vst3"
+mkdir -p "$HOME_DIR/.vst3/ParallaxStyle.vst3" "$HOME_DIR/.vst3/ParallaxStyle-1_8_0.vst3" "$HOME_DIR/.vst3/OtherPlugin.vst3"
 mkdir "$WORK/vst3" && (cd "$WORK/vst3" && unzip -q "$VST3_ZIP")
 HOME="$HOME_DIR" bash "$WORK/vst3/install.sh" > /dev/null
-[[ -f "$HOME_DIR/.vst3/ParallaxStyle-$V.vst3/Contents/x86_64-linux/ParallaxStyle-$V.so" ]] || fail "bundle not installed"
+[[ -f "$HOME_DIR/.vst3/ParallaxStyle-$F.vst3/Contents/x86_64-linux/ParallaxStyle-$F.so" ]] || fail "bundle not installed"
 [[ ! -e "$HOME_DIR/.vst3/ParallaxStyle.vst3" ]]       || fail "old unversioned bundle left installed"
-[[ ! -e "$HOME_DIR/.vst3/ParallaxStyle-1.8.0.vst3" ]] || fail "old 1.8.0 bundle left installed"
+[[ ! -e "$HOME_DIR/.vst3/ParallaxStyle-1_8_0.vst3" ]] || fail "old 1.8.0 bundle left installed"
 [[ -d "$HOME_DIR/.vst3/OtherPlugin.vst3" ]]           || fail "another plugin was removed"
 
 # --- the guide needs the 'Novità della versione' section of the version

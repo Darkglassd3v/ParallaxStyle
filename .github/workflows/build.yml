@@ -1,156 +1,213 @@
 name: Build
 
+# Pull requests: tests, builds and checks of every platform, release files checked
+# but not published. Tags v*: the same, then the GitHub Release (the tag must be the
+# version in CMakeLists.txt). Nothing is kept as an Actions artifact: the zips go
+# only to the release, built and attached in the same job.
 on:
+  pull_request:
   push:
-    branches: [ main ]
-    tags: [ "v*" ]
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  PLUGINVAL_VERSION: v1.0.4
+
 jobs:
-  build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  # Unit tests (GoogleTest) with AddressSanitizer and UBSan, line coverage of src/,
+  # and the tests of the release scripts.
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev \
+            libglu1-mesa-dev xvfb pandoc gcovr
+
+      - name: Configure (Debug, tests, sanitizers, coverage)
+        run: >
+          cmake -B build-tests -DCMAKE_BUILD_TYPE=Debug -DCOPY_PLUGIN=OFF
+          -DPARALLAXSTYLE_TESTS=ON -DPARALLAXSTYLE_SANITIZERS=ON -DPARALLAXSTYLE_COVERAGE=ON
+
+      - name: Build the tests
+        run: cmake --build build-tests --parallel --target ParallaxStyleTests ParallaxStyleAnagramTests
+
+      - name: Run the tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+        run: xvfb-run -a ctest --test-dir build-tests --output-on-failure --parallel 4
+
+      - name: Coverage of src/ (at least 80% of the lines)
+        run: >
+          gcovr --root . --filter 'src/' --object-directory build-tests
+          --print-summary --fail-under-line 80
+
+  # Linux first: on a tag it creates the release, Windows and macOS add their files.
+  linux:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev \
+            libglu1-mesa-dev xvfb pandoc
+
+      - name: Version (a tag must match CMakeLists.txt)
+        id: ver
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V=$(bash scripts/version.sh "$GITHUB_REF_NAME"); else V=$(bash scripts/version.sh); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Release)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF
+          cmake --build build --parallel
+
+      - name: pluginval, strictness 10
+        run: |
+          curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_Linux.zip"
+          unzip -q pluginval.zip
+          xvfb-run -a ./pluginval --strictness-level 10 --validate-in-process --timeout-ms 300000 \
+            --validate "build/ParallaxStyle_artefacts/Release/VST3/ParallaxStyle-$(echo ${{ steps.ver.outputs.version }} | tr . _).vst3"
+
+      - name: The Standalone starts and prints its version
+        run: |
+          set +e
+          timeout 10 xvfb-run -a "build/ParallaxStyle_artefacts/Release/Standalone/ParallaxStyle-$(echo ${{ steps.ver.outputs.version }} | tr . _)" > standalone.log 2>&1
+          code=$?
+          set -e
+          cat standalone.log
+          [ "$code" -eq 124 ] || { echo "::error::the Standalone exited with $code before 10 seconds"; exit 1; }
+          grep -q "ParallaxStyle ${{ steps.ver.outputs.version }}" standalone.log
+
+      - name: PDF guide
+        run: bash scripts/build-guide.sh "${{ steps.ver.outputs.version }}" "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf"
+
+      - name: Package
+        run: |
+          bash scripts/package.sh "${{ steps.ver.outputs.version }}" linux build/ParallaxStyle_artefacts/Release \
+            "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf" release
+          ls -la release
+
+      - name: GitHub Release
+        uses: Darkglassd3v/.github/actions/release@v1
+        with:
+          version: ${{ steps.ver.outputs.version }}
+          files: release/*.zip
+          changelog: docs/ParallaxStyle.md
+          title: ParallaxStyle v${{ steps.ver.outputs.version }}
+
+  windows-macos:
+    needs: linux
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            name: linux
           - os: windows-latest
-            name: windows
+            platform: windows
           - os: macos-latest
-            name: macos
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev \
-            libxrandr-dev libxinerama-dev libxcursor-dev libfreetype-dev \
-            libfontconfig1-dev libglu1-mesa-dev
-
-      - name: Configure (Linux / Windows)
-        if: runner.os != 'macOS'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF
-
-      - name: Configure (macOS, universal binary)
-        if: runner.os == 'macOS'
-        run: >
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF
-          "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
-
-      - name: Build
-        run: cmake --build build --config Release --parallel
-
-      - name: Package binaries
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
         shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-          else
-            VERSION="dev-${GITHUB_SHA::7}"
-          fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-
-          cat > info.txt << INFO
-          ParallaxStyle ${VERSION}
-          platform: ${{ matrix.name }}
-          commit:   ${GITHUB_SHA}
-          built:    $(date -u +"%Y-%m-%d %H:%M UTC")
-          repo:     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
-          INFO
-
-          # --- script di installazione/aggiornamento per piattaforma ---
-          case "${{ matrix.name }}" in
-            windows)
-              cat > install.bat << 'BAT'
-          @echo off
-          rem ParallaxStyle - installa/aggiorna il VST3 (eseguire come amministratore)
-          net session >nul 2>&1
-          if %errorLevel% neq 0 (
-              echo Esegui questo script come amministratore ^(tasto destro - Esegui come amministratore^)
-              pause
-              exit /b 1
-          )
-          set "DEST=%CommonProgramFiles%\VST3\ParallaxStyle.vst3"
-          if exist "%DEST%" rmdir /s /q "%DEST%"
-          xcopy /E /I /Y "%~dp0VST3\ParallaxStyle.vst3" "%DEST%" >nul
-          echo Installato/aggiornato in: %DEST%
-          echo Riavvia la DAW e riscansiona i plugin.
-          pause
-          BAT
-              SCRIPT=install.bat
-              ;;
-            macos)
-              cat > install.sh << 'SH'
-          #!/bin/bash
-          # ParallaxStyle - installa/aggiorna il VST3 (eseguire: bash install.sh)
-          set -e
-          DEST="$HOME/Library/Audio/Plug-Ins/VST3"
-          SRC="$(cd "$(dirname "$0")" && pwd)/VST3/ParallaxStyle.vst3"
-          mkdir -p "$DEST"
-          rm -rf "$DEST/ParallaxStyle.vst3"
-          cp -R "$SRC" "$DEST/"
-          xattr -cr "$DEST/ParallaxStyle.vst3" 2>/dev/null || true
-          echo "Installato/aggiornato in: $DEST"
-          echo "Riavvia la DAW e riscansiona i plugin."
-          SH
-              SCRIPT=install.sh
-              ;;
-            linux)
-              cat > install.sh << 'SH'
-          #!/bin/bash
-          # ParallaxStyle - installa/aggiorna il VST3 (eseguire: bash install.sh)
-          set -e
-          DEST="$HOME/.vst3"
-          SRC="$(cd "$(dirname "$0")" && pwd)/VST3/ParallaxStyle.vst3"
-          mkdir -p "$DEST"
-          rm -rf "$DEST/ParallaxStyle.vst3"
-          cp -R "$SRC" "$DEST/"
-          echo "Installato/aggiornato in: $DEST"
-          echo "Riavvia la DAW e riscansiona i plugin."
-          SH
-              SCRIPT=install.sh
-              ;;
-          esac
-
-          mkdir -p dist
-          cd build/ParallaxStyle_artefacts
-          SRC_DIR=.
-          [ -d Release ] && SRC_DIR=Release
-          cd "$SRC_DIR"
-          cp "$GITHUB_WORKSPACE/info.txt" .
-          cp "$GITHUB_WORKSPACE/$SCRIPT" .
-          7z a "$GITHUB_WORKSPACE/dist/ParallaxStyle-${VERSION}-${{ matrix.name }}-vst3.zip" VST3/ info.txt "$SCRIPT"
-          7z a "$GITHUB_WORKSPACE/dist/ParallaxStyle-${VERSION}-${{ matrix.name }}-standalone.zip" Standalone/ info.txt
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ParallaxStyle-${{ matrix.name }}
-          path: dist/*.zip
-          if-no-files-found: error
-
-  release:
-    name: Create release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+      - uses: actions/checkout@v5
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Version (a tag must match CMakeLists.txt)
+        id: ver
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V=$(bash scripts/version.sh "$GITHUB_REF_NAME"); else V=$(bash scripts/version.sh); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Release; macOS universal arm64 + x86_64)
+        run: |
+          if [ "${{ matrix.platform }}" = macos ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN=OFF
+          fi
+          cmake --build build --config Release --parallel
+
+      - name: pluginval, strictness 10
+        run: |
+          F=$(echo "${{ steps.ver.outputs.version }}" | tr . _)
+          if [ "${{ matrix.platform }}" = macos ]; then
+            curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_macOS.zip"
+            unzip -q pluginval.zip
+            PV=pluginval.app/Contents/MacOS/pluginval
+          else
+            curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_Windows.zip"
+            unzip -q pluginval.zip
+            PV=./pluginval.exe
+          fi
+          "$PV" --strictness-level 10 --validate-in-process --timeout-ms 300000 \
+            --validate "build/ParallaxStyle_artefacts/Release/VST3/ParallaxStyle-$F.vst3"
+
+      - name: The Standalone starts and stays open
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          F=$(echo "$V" | tr . _)
+          if [ "${{ matrix.platform }}" = macos ]; then
+            APP="build/ParallaxStyle_artefacts/Release/Standalone/ParallaxStyle-$F.app/Contents/MacOS/ParallaxStyle-$F"
+          else
+            APP="build/ParallaxStyle_artefacts/Release/Standalone/ParallaxStyle-$F.exe"
+          fi
+          "$APP" > standalone.log 2>&1 &
+          PID=$!
+          sleep 10
+          kill -0 "$PID" || { cat standalone.log; echo "::error::the Standalone closed before 10 seconds"; exit 1; }
+          kill "$PID" || true
+          cat standalone.log
+          # the console banner is printed on macOS; on Windows it goes to the debugger output
+          if [ "${{ matrix.platform }}" = macos ]; then grep -q "ParallaxStyle $V" standalone.log; fi
+
+      - name: pandoc
+        run: |
+          if [ "${{ matrix.platform }}" = macos ]; then brew install pandoc; else choco install pandoc -y --no-progress; fi
+
+      - name: PDF guide
+        run: |
+          export PATH="$PATH:/c/Program Files/Pandoc"
+          bash scripts/build-guide.sh "${{ steps.ver.outputs.version }}" "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf"
+
+      - name: Package
+        run: |
+          bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}" build/ParallaxStyle_artefacts/Release \
+            "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf" release
+          ls -la release
+
+      - name: install.bat installs the plugin and removes older versions
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $dest = Join-Path $env:CommonProgramFiles "VST3"
+          New-Item -ItemType Directory -Force (Join-Path $dest "ParallaxStyle.vst3") | Out-Null
+          $f = $v.Replace(".", "_")
+          New-Item -ItemType Directory -Force (Join-Path $dest "ParallaxStyle-1_8_0.vst3") | Out-Null
+          Expand-Archive "release/ParallaxStyle-$v-windows-vst3.zip" -DestinationPath unpacked
+          cmd /c "echo.| unpacked\install.bat"
+          if (-not (Test-Path (Join-Path $dest "ParallaxStyle-$f.vst3\Contents"))) { Write-Error "not installed"; exit 1 }
+          if (Test-Path (Join-Path $dest "ParallaxStyle.vst3")) { Write-Error "old unversioned bundle left"; exit 1 }
+          if (Test-Path (Join-Path $dest "ParallaxStyle-1_8_0.vst3")) { Write-Error "old 1.8.0 bundle left"; exit 1 }
+
+      - name: GitHub Release
+        uses: Darkglassd3v/.github/actions/release@v1
         with:
-          files: dist/*.zip
-          generate_release_notes: true
+          version: ${{ steps.ver.outputs.version }}
+          files: release/*.zip
+          changelog: docs/ParallaxStyle.md
+          title: ParallaxStyle v${{ steps.ver.outputs.version }}
+          replace: "true"

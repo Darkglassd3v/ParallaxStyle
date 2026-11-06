@@ -3,10 +3,15 @@ name: Build Anagram
 # Build LV2 pesante e lenta (~1h, ~15GB) perché builda da zero il toolchain
 # di cross-compilazione ARM64 di Darkglass (crosstool-ng via
 # mod-plugin-builder), quindi NON gira su ogni push come build.yml: solo a
-# mano o sui tag di release.
+# mano, sui tag di release e sulle pull request che cambiano questo workflow
+# o le immagini del blocco. Nessun artifact: lo zip va solo nella release.
 on:
   push:
-    tags: [ "v*" ]
+    tags: [ "v*.*.*" ]
+  pull_request:
+    paths:
+      - .github/workflows/build-anagram.yml
+      - assets/anagram/**
   workflow_dispatch:
     inputs:
       toolchain_target:
@@ -56,6 +61,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Version (a tag must match CMakeLists.txt)
+        id: ver
+        working-directory: ParallaxStyle
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V=$(bash scripts/version.sh "$GITHUB_REF_NAME"); else V=$(bash scripts/version.sh); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
       - name: Cross-compile ParallaxStyle per Anagram
         run: |
           docker run --rm \
@@ -63,56 +75,56 @@ jobs:
             darkglass-anagram:latest \
             bash -ic '
               set -e
-              cmake -S /root/source -B /root/source/build-anagram -DTARGET_ANAGRAM=ON
+              cmake -S /root/source -B /root/source/build-anagram -DTARGET_ANAGRAM=ON -DCMAKE_BUILD_TYPE=Release
               $(which cmake) --build /root/source/build-anagram
             '
 
-      - name: Package artifact
-        shell: bash
+      # La 1.8.0 si fermava qui: il bundle è in ParallaxStyle_artefacts/Release/LV2,
+      # non in ParallaxStyle_artefacts/LV2.
+      - name: PDF guide
+        working-directory: ParallaxStyle
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-          else
-            VERSION="dev-${GITHUB_SHA::7}"
-          fi
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+          bash scripts/build-guide.sh "${{ steps.ver.outputs.version }}" "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf"
 
-          cat > info.txt << INFO
-          ParallaxStyle ${VERSION} - Darkglass Anagram (LV2)
-          commit:   ${GITHUB_SHA}
-          built:    $(date -u +"%Y-%m-%d %H:%M UTC")
-          repo:     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}
+      - name: Package
+        working-directory: ParallaxStyle
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          F=$(echo "$V" | tr . _)
+          BUNDLE="build-anagram/ParallaxStyle_artefacts/Release/LV2/ParallaxStyle-$F.lv2"
+          test -f "$BUNDLE/ParallaxStyle-$F.so" || { ls -R build-anagram/ParallaxStyle_artefacts; echo "::error::$BUNDLE missing"; exit 1; }
+          test -f "$BUNDLE/manifest.ttl"
+          mkdir -p stage release
+          sudo cp -R "$BUNDLE" stage/
+          sudo chown -R "$(id -u):$(id -g)" stage
+          cp "guide/ParallaxStyle-$V-Guida.pdf" stage/
+          cat > stage/LEGGIMI.txt << INFO
+          ParallaxStyle $V - plugin LV2 per Darkglass Anagram
 
-          Deploy (unità in Developer Mode):
-            scp -O -r ParallaxStyle.lv2 root@192.168.51.1:/root/.lv2/
+          Contenuto:
+            ParallaxStyle-$F.lv2   il plugin (abbreviazione PLX)
+            ParallaxStyle-$V-Guida.pdf   guida: installazione sul pedale, aggiornamento e novità
+
+          Installazione (unità in Developer Mode, collegata via USB):
+            ssh root@192.168.51.1 "rm -rf /root/.lv2/ParallaxStyle*.lv2"
+            scp -O -r ParallaxStyle-$F.lv2 root@192.168.51.1:/root/.lv2/
             ssh root@192.168.51.1 "systemctl restart jack2 lvgl-app"
+
+          Commit: ${GITHUB_SHA}
+          Build:  $(date -u +"%Y-%m-%d %H:%M") UTC
           INFO
+          (cd stage && cmake -E tar cf "../release/ParallaxStyle-$V-anagram-lv2.zip" --format=zip -- *)
+          ls -la release
 
-          cd ParallaxStyle/build-anagram/ParallaxStyle_artefacts/LV2
-          cp "$GITHUB_WORKSPACE/info.txt" .
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          7z a "$GITHUB_WORKSPACE/dist/ParallaxStyle-${VERSION}-anagram-lv2.zip" ParallaxStyle.lv2/ info.txt
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      # azione condivisa: versione nel nome e guida dentro lo zip controllate,
+      # note dalla guida; pubblica solo sui tag (la release di solito esiste già)
+      - name: GitHub Release
+        uses: Darkglassd3v/.github/actions/release@v1
         with:
-          name: ParallaxStyle-anagram
-          path: dist/*.zip
-          if-no-files-found: error
-
-  release:
-    name: Create release
-    needs: build-anagram
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Create/aggiorna GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.zip
-          generate_release_notes: true
+          version: ${{ steps.ver.outputs.version }}
+          files: ParallaxStyle/release/*.zip
+          changelog: ParallaxStyle/docs/ParallaxStyle.md
+          title: ParallaxStyle v${{ steps.ver.outputs.version }}
+          replace: "true"

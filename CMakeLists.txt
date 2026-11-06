@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ParallaxStyle VERSION 1.1.0)
+# The version is written only here: plugin metadata, file names, the editor,
+# the startup banner and the release workflow (the tag must match it) read it.
+project(ParallaxStyle VERSION 1.9.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,6 +25,13 @@ option(PARALLAXSTYLE_COVERAGE "Build the unit tests with gcov coverage" OFF)
 
 include(FetchContent)
 
+# File names carry the version with underscores (ParallaxStyle-1_9_0.vst3): the
+# VST3 SDK module loader on Linux calls replace_extension(".so") on the bundle
+# name, so with ParallaxStyle-1.9.0.vst3 hosts look for ParallaxStyle-1.9.so.
+# The release scripts give the Standalone the dotted version (ParallaxStyle-1.9.0.exe).
+string(REPLACE "." "_" PARALLAXSTYLE_FILE_VERSION "${PROJECT_VERSION}")
+set(PARALLAXSTYLE_PRODUCT_NAME "ParallaxStyle-${PARALLAXSTYLE_FILE_VERSION}")
+
 if (TARGET_ANAGRAM)
     # ------------------------------------------------------------------------
     # Target: Darkglass Anagram (LV2, Control Ports, nessuna GUI JUCE)
@@ -30,10 +39,11 @@ if (TARGET_ANAGRAM)
     # Schema ricalcato da
     # https://github.com/Darkglass-Electronics/Plugin-Dev-Setup/tree/main/examples/juce-gain-cmake
     # ------------------------------------------------------------------------
+    # pinned to a commit (main of 2026-10-06): a moving branch would change the
+    # Anagram build without a change in this repository
     FetchContent_Declare(juce-anagram-lv2
         GIT_REPOSITORY https://github.com/Darkglass-Electronics/juce-anagram-lv2.git
-        GIT_TAG main
-        GIT_SHALLOW TRUE
+        GIT_TAG abee7b448bd2b7d0f969dc241b02c7220b0ba111
         UPDATE_DISCONNECTED TRUE
     )
     FetchContent_MakeAvailable(juce-anagram-lv2)
@@ -52,7 +62,10 @@ if (TARGET_ANAGRAM)
 
     juce_add_plugin(ParallaxStyle
         COMPANY_NAME "Darkglassd3v"
-        PRODUCT_NAME "ParallaxStyle"
+        # the bundle carries the version (ParallaxStyle-1_9_0.lv2); the LV2 URI
+        # below does not, so the pedal sees the same plugin across versions
+        PRODUCT_NAME "${PARALLAXSTYLE_PRODUCT_NAME}"
+        PLUGIN_NAME "ParallaxStyle"
         BUNDLE_ID "com.darkglassd3v.parallaxstyle"
         DESCRIPTION "Parallel bass processor: split low/high, comp+sat, drive, EQ"
         FORMATS LV2
@@ -113,7 +126,11 @@ else()
         PLUGIN_MANUFACTURER_CODE Dgd3
         PLUGIN_CODE Pllx
         FORMATS VST3 Standalone
-        PRODUCT_NAME "ParallaxStyle"
+        # files carry the version (ParallaxStyle-1_9_0.vst3, the Standalone
+        # program); the plugin name and codes do not, so DAW sessions keep
+        # finding the same plugin after an update
+        PRODUCT_NAME "${PARALLAXSTYLE_PRODUCT_NAME}"
+        PLUGIN_NAME "ParallaxStyle"
         IS_SYNTH FALSE
         NEEDS_MIDI_INPUT FALSE
         NEEDS_MIDI_OUTPUT FALSE

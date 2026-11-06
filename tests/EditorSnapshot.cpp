@@ -13,7 +13,6 @@ TEST (EditorSnapshot, WritesEveryPageAsPngWhenSnapDirIsSet)
     setParam (*p, "eqm1gain", -6.0f);
     setParam (*p, "eqhigain", 4.0f);
     setParam (*p, "middrive", 12.0f);
-    setParam (*p, "highon", 0.0f);
     std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
     for (int k = 0; k < 12; ++k)
     {

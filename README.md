@@ -1,54 +1,94 @@
-# ParallaxStyle — Parallel Bass Processor (VST3) v1.1
+# ParallaxStyle — processore parallelo per basso
 
-Plugin VST3 in stile Neural DSP Parallax: split parallelo low/high con crossover
-Linkwitz-Riley 4° ordine, compressione + saturazione sulla banda bassa,
-distorsione (3 caratteri) sulla banda alta, **cab sim a IR custom** e
-**accordatore integrato**.
+ParallaxStyle divide il segnale del basso in tre bande parallele (LOW compressa e
+saturata, MID con guadagno e distorsione, HIGH distorta con cinque caratteri), le somma,
+le passa per una simulazione di cassa a risposta all'impulso e per un equalizzatore a
+quattro bande. Uno spettro in tempo reale mostra il segnale e le bande, che si spostano
+trascinandone i bordi. È disponibile come VST3 e Standalone per Windows, macOS e Linux,
+e come LV2 per il pedale Darkglass Anagram.
 
-## Signal flow
+La guida per chi usa il plugin (installazione passo passo per ogni sistema, interfaccia,
+aggiornamento, novità di ogni versione) è [`docs/ParallaxStyle.md`](docs/ParallaxStyle.md);
+ogni release la contiene in PDF dentro ogni archivio.
 
-```
-input ──┬── LR4 LP ─► Comp ─► Soft Sat ─► Low Level ──────────────────┐
-        │                                                              ├─► Σ ─► [IR: Full] ─► Output ─► Blend
-        └── LR4 HP ─► Drive ─► Shaper ─► Tone ─► [IR: High] ─► Hi Lvl ─┘
-             │
-             └─ (tap input pulito ─► tuner)
-```
+![ParallaxStyle](docs/images/editor.png)
 
-## Novità v1.1
+## Struttura
 
-- **Cab sim IR custom**: pulsante LOAD IR (wav/aiff/flac), convoluzione
-  zero-latency, normalizzazione automatica. Selettore posizione:
-  - **High Band** — l'IR colora solo la banda distorta, le basse restano piene
-    (comportamento split-parallelo classico)
-  - **Full Mix** — l'IR processa la somma delle due bande
-  - Il path dell'IR è salvato nello stato del plugin → persiste nella sessione DAW.
-- **Tuner**: YIN (difference function + CMND + interpolazione parabolica) su
-  input decimato a fs/4, gate su RMS, smoothing, display nota + Hz + cents con
-  barra ±50 cent. Ottimizzato per il registro del basso (fino a ~400 Hz,
-  low B a 31 Hz senza problemi).
+| Percorso | Contenuto |
+|---|---|
+| `src/PluginProcessor.*` | DSP: crossover, bande, gate, IR, EQ, smoothing, tap per GUI |
+| `src/PluginEditor.*`, `src/Theme.h` | interfaccia e stile |
+| `src/SpectrumView.*`, `src/SpectrumAnalyzer.*`, `src/FrequencyAxis.h` | spettro live e bande trascinabili |
+| `src/PitchDetector.h` | accordatore (YIN) |
+| `tests/` | test GoogleTest (processor, editor, variante Anagram) e degli script di release |
+| `scripts/` | versione, pacchetti, guida PDF |
+| `packaging/` | script di installazione inclusi negli archivi |
+| `docs/` | guida, report TDD per versione, esplorazioni |
 
 ## Build locale (Linux)
 
 ```bash
-sudo apt install build-essential cmake libasound2-dev libx11-dev libxext-dev \
-    libxrandr-dev libxinerama-dev libxcursor-dev libfreetype-dev \
-    libfontconfig1-dev libglu1-mesa-dev
+sudo apt install build-essential cmake ninja-build libasound2-dev libx11-dev libxext-dev \
+    libxrandr-dev libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev \
+    libglu1-mesa-dev
 
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -j$(nproc)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-Il VST3 viene copiato in `~/.vst3/`. Attenzione: il path del progetto **non deve
-contenere spazi o parentesi** (lo script post-build VST3 di JUCE non li gestisce).
+Il VST3 (`ParallaxStyle-<x_y_z>.vst3`) viene copiato in `~/.vst3/`; con
+`-DCOPY_PLUGIN=OFF` resta solo in `build/ParallaxStyle_artefacts/Release`. Il path del
+progetto **non deve contenere spazi o parentesi** (lo script post-build VST3 di JUCE non
+li gestisce).
 
-## Build multi-piattaforma (Windows + macOS) via GitHub Actions
+La versione si scrive solo in `CMakeLists.txt` (`project(ParallaxStyle VERSION x.y.z)`):
+la leggono i metadati del plugin, i nomi dei file, l'interfaccia, il banner di avvio e la
+CI. Nei nomi dei plugin compare con i trattini bassi (`1_9_0`) perché il loader del VST3
+SDK su Linux tratta come estensione il testo dopo l'ultimo punto.
 
-Cross-compilare da Linux verso Windows è fragile con JUCE, e verso macOS non è
-praticabile (SDK Apple utilizzabile solo su hardware Apple). La soluzione è il
-workflow CI incluso (`.github/workflows/build.yml`): a ogni push su `main`
-builda su runner nativi Linux, Windows e macOS (universal binary arm64+x86_64)
-e carica i tre VST3 come artifact scaricabili dalla tab Actions.
+## Test
+
+```bash
+sudo apt install xvfb gcovr pandoc   # anche Google Chrome per la guida PDF
+cmake -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCOPY_PLUGIN=OFF \
+    -DPARALLAXSTYLE_TESTS=ON -DPARALLAXSTYLE_SANITIZERS=ON -DPARALLAXSTYLE_COVERAGE=ON
+cmake --build build-tests --parallel
+xvfb-run -a ctest --test-dir build-tests --output-on-failure
+gcovr --root . --filter src/ --object-directory build-tests --print-summary
+```
+
+- `ParallaxStyleTests`: DSP, stato, preset, IR, smoothing (nessun click girando le
+  manopole), blocchi oltre la dimensione annunciata, nessuna allocazione nel thread
+  audio, editor (versione visibile, controlli dentro la finestra e senza sovrapposizioni,
+  ogni parametro collegato a un controllo), spettro, accordatore.
+- `ParallaxStyleAnagramTests`: la variante Anagram del processor compilata in nativo
+  (bypass, reset, abbreviazione, registri della CPU).
+- `ReleaseScripts`: controllo versione/tag, pacchetti, script di installazione, guida PDF.
+
+Ogni `jassert` di JUCE fa fallire il test in corso. Per guardare l'interfaccia:
+
+```bash
+SNAP_DIR=/tmp xvfb-run -a build-tests/tests/ParallaxStyleTests_artefacts/Debug/ParallaxStyleTests \
+    --gtest_filter='EditorSnapshot.*'     # scrive /tmp/editor-0.png, -1, -2
+```
+
+## CI e release
+
+- `.github/workflows/build.yml` gira su ogni pull request e su ogni tag `v*`: test con
+  AddressSanitizer e UBSan e copertura di `src/` (almeno 80% delle righe), poi build su
+  Linux, Windows e macOS (universal), [pluginval](https://github.com/Tracktion/pluginval)
+  a strictness 10, avvio dello Standalone, guida PDF, archivi e controlli dell'azione
+  condivisa `Darkglassd3v/.github/actions/release`. Sui tag pubblica la release, con le
+  note brevi prese dalla sezione "Novità della versione" della guida. Nessun artifact
+  delle Actions: gli archivi vanno solo nella release.
+- `.github/workflows/build-anagram.yml` cross-compila l'LV2 per Anagram (circa 1 ora) sui
+  tag, a mano e sulle pull request che lo modificano, e aggiunge il suo archivio alla release.
+
+Ogni versione si sviluppa sul branch `release/v<versione>` creato da `main`, con una pull
+request verso `main`; si unisce con un merge commit quando la CI è verde, poi il tag
+`v<versione>` su `main` avvia la release. Prima del tag: versione in `CMakeLists.txt` e
+sezione `## Novità della versione <versione>` in `docs/ParallaxStyle.md`.
 
 ## Build per Darkglass Anagram (LV2)
 
@@ -76,7 +116,11 @@ desktop, usando lo stesso codice DSP condiviso con alcune differenze:
 - **Bypass**: Anagram richiede una `lv2:enabled` Control Port dedicata, qui
   esposta come parametro `bypass` (assente invece dalla build desktop, per
   non spostare gli indici dei parametri già usati in automazioni/preset
-  esistenti).
+  esistenti). Il plugin la gestisce da sé con una dissolvenza di 50 ms.
+- **Requisiti Darkglass**: abbreviazione `PLX` (`getAlternateDisplayNames`),
+  `reset()` che azzera tutto lo stato (porta `kx:Reset`, due istanze mono
+  restano allineate), nessuna modifica ai registri flush-to-zero della CPU,
+  smoothing su tutti i parametri continui.
 
 Tutto questo è pilotato dalla macro `PARALLAXSTYLE_ANAGRAM_BUILD` (0/1),
 impostata in `CMakeLists.txt` in base a `TARGET_ANAGRAM`.
@@ -90,7 +134,8 @@ buildare **una volta sola** seguendo
 (nativo su Linux) o
 [BUILDING-DOCKER.md](https://github.com/Darkglass-Electronics/Plugin-Dev-Setup/blob/main/BUILDING-DOCKER.md)
 (macOS/Windows, via Docker). Non è incluso nella CI di questo repo: è un
-processo locale, pesante (~1 ora, ~15 GB) e specifico per lo sviluppo Anagram.
+processo pesante (~1 ora, ~15 GB): in questo repository lo esegue il workflow
+`build-anagram.yml` sui tag di release, a mano e sulle pull request che lo modificano.
 
 ### Build (via Docker, riassunto)
 
@@ -107,54 +152,28 @@ docker run --name anagram-build -ti \
 # 3) dentro il container: build directory SEPARATA da quella desktop
 #    (il fetch di JUCE è patchato per la cross-compilazione, non va
 #    mescolato con una build directory desktop già configurata)
-cmake -S /root/source -B /root/source/build-anagram -DTARGET_ANAGRAM=ON
+cmake -S /root/source -B /root/source/build-anagram -DTARGET_ANAGRAM=ON -DCMAKE_BUILD_TYPE=Release
 $(which cmake) --build /root/source/build-anagram
 ```
 
 L'LV2 bundle finito si trova in
-`build-anagram/ParallaxStyle_artefacts/LV2/ParallaxStyle.lv2/`.
+`build-anagram/ParallaxStyle_artefacts/Release/LV2/ParallaxStyle-<x_y_z>.lv2/`.
 
 ### Deploy su un'unità in Developer Mode
 
 ```bash
-scp -O -r ParallaxStyle.lv2 root@192.168.51.1:/root/.lv2/
+ssh root@192.168.51.1 "rm -rf /root/.lv2/ParallaxStyle*.lv2"
+scp -O -r ParallaxStyle-1_9_0.lv2 root@192.168.51.1:/root/.lv2/
 ssh root@192.168.51.1 "systemctl restart jack2 lvgl-app"
 ```
 
 ### Note
 
-- `assets/anagram/block-off.png` e `block-on.png` sono placeholder 200×200
-  generati automaticamente (blocco tinta unita): vanno sostituiti con la
-  grafica reale del blocco prima di qualsiasi distribuzione.
+- `assets/anagram/block-on.png` e `block-off.png` (200×200) riprendono lo stile
+  dell'interfaccia: tre barre parallele nei colori delle bande. Si rigenerano con
+  `python3 scripts/make-anagram-blocks.py` (serve Pillow).
 - La categoria LV2 (`lv2:DistortionPlugin`, vedi
   [CATEGORIES.md](https://github.com/Darkglass-Electronics/Plugin-Dev-Setup/blob/main/CATEGORIES.md))
-  e altri metadati Anagram (es. `dg:abbreviation`) potrebbero richiedere
-  aggiustamenti dopo un primo test sull'hardware reale, che non è stato
-  possibile effettuare in questo ambiente.
-
-## Parametri
-
-| Parametro  | Range            | Note                                         |
-|------------|------------------|-----------------------------------------------|
-| Crossover  | 80–1000 Hz       | default 250 Hz                                |
-| Low Comp   | 0–1              | threshold 0 → -36 dB, ratio fissa 4:1         |
-| Low Sat    | 0–1              | soft clip x/(1+\|x\|)                          |
-| Low Level  | -24/+12 dB       |                                               |
-| Drive      | 0–40 dB          | gain pre-waveshaper                           |
-| Character  | Tube/Rodent/Fuzz | tanh / clip RAT-style / exp fuzz asimmetrico  |
-| Tone       | 1–12 kHz         | LPF 1° ordine post-distorsione                |
-| High Level | -24/+12 dB       |                                               |
-| Cab IR     | Off/High/Full    | posizione della convoluzione IR               |
-| Blend      | 0–1              | dry/wet globale                               |
-| Output     | -24/+12 dB       |                                               |
-
-## Note tecniche
-
-- Parametri via puntatori atomici cachati, nessun lookup per stringa in audio thread.
-- Tuner FIFO lock-free (AbstractFifo): l'audio thread non si blocca mai,
-  l'analisi YIN gira sul GUI thread a 20 Hz.
-- `Convolution::loadImpulseResponse` carica su thread interno JUCE: il cambio IR
-  non produce glitch.
-- Niente oversampling sul waveshaper (v1.1): con drive alto possibile aliasing
-  sulle armoniche alte. Punto di inserimento futuro: `juce::dsp::Oversampling`
-  attorno allo shaper della banda alta.
+  e gli altri metadati Anagram vanno verificati al primo test sull'hardware reale:
+  i test del repository coprono la variante Anagram compilata in nativo e la
+  cross-compilazione in CI, non il pedale.
