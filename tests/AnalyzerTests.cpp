@@ -249,3 +249,38 @@ TEST_F (SpectrumViewTest, StopsRedrawingWhenNothingChanges)
     runSine (*processor, 110.0f, 0.5f, 1600, 1600);
     EXPECT_TRUE (view->refresh());
 }
+
+TEST_F (SpectrumViewTest, TheMidBandCannotBeDraggedInsideOut)
+{
+    const FrequencyAxis axis { (float) view->getWidth() };
+
+    setParam (*processor, "midfrom", 600.0f);
+    setParam (*processor, "midto", 1200.0f);
+    ASSERT_TRUE (view->beginDragAt (view->handlePosition ("midto")));
+    view->dragTo (axis.xForFrequency (300.0f));      // TO below FROM...
+    view->endDrag();
+    EXPECT_GT (getParam (*processor, "midto"), getParam (*processor, "midfrom"));   // ...stops above it
+
+    ASSERT_TRUE (view->beginDragAt (view->handlePosition ("midfrom")));
+    view->dragTo (axis.xForFrequency (3000.0f));     // FROM above TO...
+    view->endDrag();
+    EXPECT_LT (getParam (*processor, "midfrom"), getParam (*processor, "midto"));   // ...stops below it
+}
+
+TEST_F (AnalyzerTapTest, StaysOnWhileAnyEditorIsOpen)
+{
+    // a host can open the editor twice: closing one must not stop the other's spectrum
+    auto p = makePrepared (480);
+    auto& px = asParallax (*p);
+    std::vector<float> dest (16384);
+
+    px.setAnalyzerActive (true);
+    px.setAnalyzerActive (true);
+    px.setAnalyzerActive (false);
+    runSine (*p, 110.0f, 0.5f, 4800, 480);
+    EXPECT_EQ (px.readAnalyzerInput (dest.data(), (int) dest.size()), 4800);
+
+    px.setAnalyzerActive (false);
+    runSine (*p, 110.0f, 0.5f, 4800, 480);
+    EXPECT_EQ (px.readAnalyzerInput (dest.data(), (int) dest.size()), 0);
+}
