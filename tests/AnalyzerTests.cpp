@@ -231,3 +231,21 @@ TEST (PitchDetectorTest, ReadoutRoundsTheCentsToWholeNumbers)
     EXPECT_EQ (pitch::readout (108.0f), "108.0 Hz  -32 cent");  // A2 - 31.8 cent
     EXPECT_EQ (pitch::readout (110.0f), "110.0 Hz  +0 cent");
 }
+
+TEST_F (SpectrumViewTest, StopsRedrawingWhenNothingChanges)
+{
+    // silence: after the spectra have fallen to the floor, frames stop asking for a repaint
+    bool redraw = true;
+    for (int frame = 0; frame < 120 && redraw; ++frame)
+        redraw = view->refresh();
+    EXPECT_FALSE (redraw);
+    EXPECT_FALSE (view->refresh());
+
+    // a moved crossover or a new signal redraw again
+    setParam (*processor, "lowfreq", 320.0f);
+    EXPECT_TRUE (view->refresh());
+    EXPECT_FALSE (view->refresh());
+
+    runSine (*processor, 110.0f, 0.5f, 1600, 1600);
+    EXPECT_TRUE (view->refresh());
+}
