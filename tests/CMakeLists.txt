@@ -75,3 +75,8 @@ parallaxstyle_add_tests(ParallaxStyleAnagramTests 1
     AnagramTests.cpp
     "${PROJECT_SOURCE_DIR}/src/PluginProcessor.cpp"
 )
+
+# Release scripts (version check, packaging, install script, PDF guide): bash
+if (UNIX)
+    add_test (NAME ReleaseScripts COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/release/test_release_scripts.sh")
+endif()
