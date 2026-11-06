@@ -39,10 +39,13 @@ jobs:
         with:
           path: ParallaxStyle
 
+      # fissato a un commit (main del 22/10/2026): un branch che si muove cambierebbe
+      # il toolchain senza un cambiamento in questo repository
       - name: Checkout Darkglass Plugin-Dev-Setup (solo docker/)
         uses: actions/checkout@v4
         with:
           repository: Darkglass-Electronics/Plugin-Dev-Setup
+          ref: 78b2e4afd2a7999c28ada4338031b4b4d73e5940
           sparse-checkout: |
             docker
           path: Plugin-Dev-Setup
@@ -54,9 +57,12 @@ jobs:
         with:
           context: Plugin-Dev-Setup/docker
           tags: darkglass-anagram:latest
+          # Dal fork Darkglass di plugin-builder (settembre 2026) "full" non è più un
+          # target: bootstrap.sh esegue "make full", che non esiste. La build completa
+          # è il target vuoto; "minimal" resta.
           build-args: |
             debug=false
-            target=${{ github.event.inputs.toolchain_target || 'full' }}
+            target=${{ github.event.inputs.toolchain_target == 'minimal' && 'minimal' || '' }}
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
