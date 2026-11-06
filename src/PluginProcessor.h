@@ -70,8 +70,15 @@ public:
 
 #if ! PARALLAXSTYLE_ANAGRAM_BUILD
     // Analizzatore di spettro: ingresso (dopo input gain e gate) e uscita, mono.
-    // Si riempiono solo mentre l'editor li chiede, così senza GUI non costano nulla.
-    void setAnalyzerActive (bool shouldBeActive) noexcept { analyzerActive = shouldBeActive; }
+    // Si riempiono solo mentre almeno un editor li chiede (true all'apertura,
+    // false alla chiusura), così senza GUI non costano nulla.
+    void setAnalyzerActive (bool editorOpens) noexcept
+    {
+        if (editorOpens)
+            ++analyzerUsers;
+        else if (analyzerUsers.load() > 0)
+            --analyzerUsers;
+    }
     int readAnalyzerInput  (float* dest, int maxSamples) { return analyzerInput.read (dest, maxSamples); }
     int readAnalyzerOutput (float* dest, int maxSamples) { return analyzerOutput.read (dest, maxSamples); }
 #endif
@@ -92,9 +99,26 @@ private:
 #endif
     static void accumulatePeak (std::atomic<float>& target, const juce::AudioBuffer<float>& buf);
 
+    // Percorso audio (ProcessorAudio.cpp)
+    struct Ramp
+    {
+        float from = 0.0f, to = 0.0f;   // valore a inizio e fine pezzo
+        bool active() const noexcept { return from > 0.0f || to > 0.0f; }
+    };
+    struct ChunkRamps { Ramp comp, lowSat, midDrive, midMix, lowOn, midOn, highOn; };
+
     void updateTargets();
     bool anySmoothing() const noexcept;
     void processChunk (juce::AudioBuffer<float>& chunk);
+    ChunkRamps advanceRamps (int numSamples);
+    void applyGate (juce::AudioBuffer<float>& buffer);
+    void processLowBand  (int numChannels, int numSamples, const ChunkRamps&);
+    void processMidBand  (int numChannels, int numSamples, const ChunkRamps&);
+    void processHighBand (int numChannels, int numSamples, const ChunkRamps&);
+    void sumBandsAndMaster (juce::AudioBuffer<float>& buffer);
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    void mixBypass (juce::AudioBuffer<float>& buffer, Ramp bypass);
+#endif
 
     // Rampe dei parametri che non hanno uno smoothing proprio (filtri, compressore,
     // saturazione, drive dei medi, EQ, accensione delle bande, bypass): 50 ms,
@@ -112,17 +136,20 @@ private:
     Linear bypassS;
 #endif
 
-    template <typename Fn>
-    void forEachSmoother (Fn&& fn)
+    template <typename Self, typename Fn>
+    static void forEachSmootherOf (Self& self, Fn&& fn)
     {
-        for (auto* s : { &lowFreqS, &midFromS, &midToS, &highFreqS, &toneS }) fn (*s);
-        for (auto& s : eqFreqS) fn (s);
-        for (auto& s : eqGainS) fn (s);
-        for (auto* s : { &compS, &lowSatS, &midDriveS, &midMixS, &lowOnS, &midOnS, &highOnS }) fn (*s);
+        for (auto* s : { &self.lowFreqS, &self.midFromS, &self.midToS, &self.highFreqS, &self.toneS }) fn (*s);
+        for (auto& s : self.eqFreqS) fn (s);
+        for (auto& s : self.eqGainS) fn (s);
+        for (auto* s : { &self.compS, &self.lowSatS, &self.midDriveS, &self.midMixS,
+                         &self.lowOnS, &self.midOnS, &self.highOnS }) fn (*s);
 #if PARALLAXSTYLE_ANAGRAM_BUILD
-        fn (bypassS);
+        fn (self.bypassS);
 #endif
     }
+    template <typename Fn> void forEachSmoother (Fn&& fn)       { forEachSmootherOf (*this, fn); }
+    template <typename Fn> void forEachSmoother (Fn&& fn) const { forEachSmootherOf (*this, fn); }
 
     int maxBlockSize = 512;
 
@@ -199,7 +226,7 @@ private:
         int  read (float* dest, int maxSamples);
     };
     MonoTap analyzerInput, analyzerOutput;
-    std::atomic<bool> analyzerActive { false };
+    std::atomic<int> analyzerUsers { 0 };
 #endif
 
     std::atomic<float>* pInput    = nullptr;

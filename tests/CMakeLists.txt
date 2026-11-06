@@ -53,11 +53,18 @@ function(parallaxstyle_add_tests name anagram)
     endif()
 
     if (PARALLAXSTYLE_COVERAGE)
-        target_compile_options(${name} PRIVATE --coverage -O0)
+        # the plugin and test sources, not the JUCE modules: gcov cannot read back
+        # some of them (harfbuzz). The test sources are instrumented too, otherwise
+        # the linker may keep their uninstrumented copy of an inline function of
+        # src/ and its lines count as never run.
+        set_source_files_properties(TestMain.cpp AllocationCounter.cpp ${ARGN} TARGET_DIRECTORY ${name}
+                                    PROPERTIES COMPILE_OPTIONS "--coverage;-O0")
         target_link_options(${name} PRIVATE --coverage)
     endif()
 
-    gtest_discover_tests(${name} DISCOVERY_TIMEOUT 120 PROPERTIES TIMEOUT 300)
+    # list the tests when CTest runs (under xvfb-run in CI), not at build time:
+    # the test programs open a JUCE GUI context
+    gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST DISCOVERY_TIMEOUT 120 PROPERTIES TIMEOUT 300)
 endfunction()
 
 parallaxstyle_add_tests(ParallaxStyleTests 0
@@ -67,6 +74,7 @@ parallaxstyle_add_tests(ParallaxStyleTests 0
     EditorSnapshot.cpp
     Benchmark.cpp
     "${PROJECT_SOURCE_DIR}/src/PluginProcessor.cpp"
+    "${PROJECT_SOURCE_DIR}/src/ProcessorAudio.cpp"
     "${PROJECT_SOURCE_DIR}/src/PluginEditor.cpp"
     "${PROJECT_SOURCE_DIR}/src/SpectrumAnalyzer.cpp"
     "${PROJECT_SOURCE_DIR}/src/SpectrumView.cpp"
@@ -75,6 +83,7 @@ parallaxstyle_add_tests(ParallaxStyleTests 0
 parallaxstyle_add_tests(ParallaxStyleAnagramTests 1
     AnagramTests.cpp
     "${PROJECT_SOURCE_DIR}/src/PluginProcessor.cpp"
+    "${PROJECT_SOURCE_DIR}/src/ProcessorAudio.cpp"
 )
 
 # Release scripts (version check, packaging, install script, PDF guide): bash

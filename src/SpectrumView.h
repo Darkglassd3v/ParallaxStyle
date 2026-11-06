@@ -53,6 +53,11 @@ private:
     juce::Path spectrumPath (const SpectrumAnalyzer&, bool closed) const;
     juce::Path eqCurve() const;
     void drawBand (juce::Graphics&, float fromHz, float toHz, juce::Colour, bool on) const;
+    void drawGrid (juce::Graphics&) const;
+    void drawBands (juce::Graphics&) const;
+    void drawSpectra (juce::Graphics&) const;
+    void drawHandles (juce::Graphics&) const;
+    bool isOn (const char* bandSwitch) const;
 
     ParallaxStyleProcessor& processor;
     SpectrumAnalyzer inputSpectrum, outputSpectrum;

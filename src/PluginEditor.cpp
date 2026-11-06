@@ -231,17 +231,23 @@ TunerComponent::TunerComponent (ParallaxStyleProcessor& p) : processor (p)
     startTimerHz (20);
 }
 
-void TunerComponent::timerCallback()
+void TunerComponent::setShown (const juce::String& description)
+{
+    if (description != getDescription())
+    {
+        setDescription (description);   // gli screen reader leggono la nota
+        repaint();
+    }
+}
+
+void TunerComponent::update()
 {
     if (pTunerOn->load() < 0.5f)
     {
-        if (hasSignal || windowFill > 0)
-        {
-            hasSignal = false;
-            windowFill = 0;
-            smoothedFreq = 0.0f;
-            repaint();
-        }
+        hasSignal = false;
+        windowFill = 0;
+        smoothedFreq = 0.0f;
+        setShown ("Tuner off");
         return;
     }
 
@@ -269,12 +275,9 @@ void TunerComponent::timerCallback()
 
     if (rms < 0.003f)
     {
-        if (hasSignal)
-        {
-            hasSignal = false;
-            smoothedFreq = 0.0f;
-            repaint();
-        }
+        hasSignal = false;
+        smoothedFreq = 0.0f;
+        setShown ({});
         return;
     }
 
@@ -285,7 +288,7 @@ void TunerComponent::timerCallback()
                      : 0.7f * smoothedFreq + 0.3f * freq;
         note = pitch::noteFor (smoothedFreq);
         hasSignal = true;
-        repaint();
+        setShown (note.name + ", " + pitch::readout (smoothedFreq));
     }
 }
 
@@ -341,6 +344,18 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
 {
     setLookAndFeel (&lnf);
 
+    setupHeader();
+    addAndMakeVisible (spectrum);
+    setupPages();
+    setupFooter();
+    attachParameters();
+
+    startTimerHz (30);
+    setSize (900, 600);
+}
+
+void ParallaxStyleEditor::setupHeader()
+{
     // --- header ---
     titleLabel.setText ("PARALLAX STYLE", juce::dontSendNotification);
     titleLabel.setFont (theme::font (17.0f, true).withKerningFactor (0.14f));
@@ -356,32 +371,6 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
 
     for (auto* b : { &presetSaveB, &presetLoadB, &resetB })
         addAndMakeVisible (*b);
-
-    addAndMakeVisible (spectrum);
-
-    // --- pagine ---
-    tabs.addTab ("BANDS", juce::Colours::transparentBlack, &bandsPage, false);
-    tabs.addTab ("EQ",    juce::Colours::transparentBlack, &eqPage,    false);
-    tabs.addTab ("CAB",   juce::Colours::transparentBlack, &cabPage,   false);
-    tabs.setTabBarDepth (30);
-    tabs.setOutline (0);
-    tabs.setIndent (0);
-    addAndMakeVisible (tabs);
-
-    cabPage.loadIR.onClick = [this]
-    {
-        fileChooser = std::make_unique<juce::FileChooser> (
-            "Seleziona un file IR", juce::File(), "*.wav;*.aif;*.aiff;*.flac");
-
-        fileChooser->launchAsync (juce::FileBrowserComponent::openMode
-                                    | juce::FileBrowserComponent::canSelectFiles,
-            [this] (const juce::FileChooser& fc)
-            {
-                const auto file = fc.getResult();
-                if (file.existsAsFile())
-                    processor.loadIR (file);
-            });
-    };
 
     // --- preset save/load ---
     const auto presetDir = juce::File::getSpecialLocation (
@@ -421,7 +410,37 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
 
     // --- reset ---
     resetB.onClick = [this] { processor.resetToDefaults(); };
+}
 
+void ParallaxStyleEditor::setupPages()
+{
+    // --- pagine ---
+    tabs.addTab ("BANDS", juce::Colours::transparentBlack, &bandsPage, false);
+    tabs.addTab ("EQ",    juce::Colours::transparentBlack, &eqPage,    false);
+    tabs.addTab ("CAB",   juce::Colours::transparentBlack, &cabPage,   false);
+    tabs.setTabBarDepth (30);
+    tabs.setOutline (0);
+    tabs.setIndent (0);
+    addAndMakeVisible (tabs);
+
+    cabPage.loadIR.onClick = [this]
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Seleziona un file IR", juce::File(), "*.wav;*.aif;*.aiff;*.flac");
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode
+                                    | juce::FileBrowserComponent::canSelectFiles,
+            [this] (const juce::FileChooser& fc)
+            {
+                const auto file = fc.getResult();
+                if (file.existsAsFile())
+                    processor.loadIR (file);
+            });
+    };
+}
+
+void ParallaxStyleEditor::setupFooter()
+{
     // --- footer ---
     input.setup  (*this, "INPUT",  theme::accent, " dB");
     gate.setup   (*this, "GATE",   theme::accent, " dB");
@@ -442,7 +461,10 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     tunerToggle.setColour (juce::ToggleButton::tickColourId, theme::accent);
     addAndMakeVisible (tunerToggle);
     addAndMakeVisible (tuner);
+}
 
+void ParallaxStyleEditor::attachParameters()
+{
     // --- attachments ---
     auto& vts = processor.apvts;
     auto attach = [&] (Knob& k, const char* id)
@@ -469,9 +491,6 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
     buttonAttachments.push_back (std::make_unique<ButtonAttachment> (vts, "lowon",   b.lowCard.power));
     buttonAttachments.push_back (std::make_unique<ButtonAttachment> (vts, "midon",   b.midCard.power));
     buttonAttachments.push_back (std::make_unique<ButtonAttachment> (vts, "highon",  b.highCard.power));
-
-    startTimerHz (30);
-    setSize (900, 600);
 }
 
 ParallaxStyleEditor::~ParallaxStyleEditor()
@@ -479,7 +498,7 @@ ParallaxStyleEditor::~ParallaxStyleEditor()
     setLookAndFeel (nullptr);
 }
 
-void ParallaxStyleEditor::timerCallback()
+void ParallaxStyleEditor::refreshIndicators()
 {
     inMeter.pushLevel  (processor.consumeInputPeak());
     outMeter.pushLevel (processor.consumeOutputPeak());

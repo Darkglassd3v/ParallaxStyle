@@ -1,6 +1,8 @@
 #include "TestSupport.h"
 #include "PluginEditor.h"
 
+#include <juce_audio_formats/juce_audio_formats.h>
+
 using namespace testutil;
 
 namespace
@@ -85,9 +87,7 @@ TEST_F (EditorTest, MetersFollowTheProcessedSignal)
 {
     EditorFixture f;
     runSine (*f.processor, 110.0f, 0.9f, 4800, 480);
-
-    juce::Thread::sleep (60);
-    juce::Timer::callPendingTimersSynchronously();
+    dynamic_cast<ParallaxStyleEditor&> (*f.editor).refreshIndicators();
 
     const auto image = f.editor->createComponentSnapshot (f.editor->getLocalBounds());
     EXPECT_TRUE (image.isValid());
@@ -275,4 +275,90 @@ TEST_F (EditorTest, EveryParameterIsBoundToAControl)
         EXPECT_TRUE (bound) << id;
         ranged->setValueNotifyingHost (ranged->getDefaultValue());
     }
+}
+
+//==============================================================================
+namespace
+{
+    // what the editor's timers do, called directly so the tests do not depend on time
+    void runTimers (EditorFixture& f, int times)
+    {
+        auto& editor = dynamic_cast<ParallaxStyleEditor&> (*f.editor);
+        std::vector<TunerComponent*> tuners;
+        collect (editor, tuners);
+        for (int i = 0; i < times; ++i)
+        {
+            editor.refreshIndicators();
+            for (auto* t : tuners)
+                t->update();
+        }
+    }
+}
+
+TEST_F (EditorTest, TunerShowsTheNoteOfTheBassAndClearsWhenTurnedOff)
+{
+    EditorFixture f;
+    std::vector<TunerComponent*> tuners;
+    collect (*f.editor, tuners);
+    ASSERT_EQ (tuners.size(), 1u);
+    auto& tuner = *tuners[0];
+
+    for (int round = 0; round < 6; ++round)   // ~0.6 s of an open A string
+    {
+        runSine (*f.processor, 110.0f, 0.4f, 4800, 480);
+        runTimers (f, 1);
+    }
+    EXPECT_TRUE (tuner.getDescription().startsWith ("A2")) << tuner.getDescription();
+    EXPECT_TRUE (tuner.createComponentSnapshot (tuner.getLocalBounds()).isValid());
+
+    for (int round = 0; round < 4; ++round)   // silence: the note goes away
+    {
+        runSine (*f.processor, 110.0f, 0.0f, 4800, 480);
+        runTimers (f, 1);
+    }
+    EXPECT_TRUE (tuner.getDescription().isEmpty()) << tuner.getDescription();
+
+    setParam (*f.processor, "tuneron", 0.0f);
+    runTimers (f, 2);
+    EXPECT_EQ (tuner.getDescription(), "Tuner off");
+    EXPECT_TRUE (tuner.createComponentSnapshot (tuner.getLocalBounds()).isValid());
+}
+
+TEST_F (EditorTest, CabPageShowsTheNameOfTheLoadedImpulseResponse)
+{
+    // the IR file outlives the editor and the processor: JUCE reads it on a background thread
+    const auto ir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("cab-name-test.wav");
+    {
+        juce::AudioBuffer<float> b (1, 64);
+        b.clear();
+        b.setSample (0, 0, 1.0f);
+        ir.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (ir.createOutputStream());
+        std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (stream.get(), 48000.0, 1, 16, {}, 0));
+        ASSERT_NE (writer, nullptr);
+        stream.release();
+        writer->writeFromAudioSampleBuffer (b, 0, 64);
+    }
+
+    {
+        EditorFixture f;
+        auto shown = [&f] (const juce::String& text)
+        {
+            std::vector<juce::TabbedComponent*> tabs;
+            collect (*f.editor, tabs);
+            std::vector<juce::Label*> labels;
+            collect (*tabs[0]->getTabContentComponent (2), labels);
+            return std::any_of (labels.begin(), labels.end(), [&text] (juce::Label* l) { return l->getText() == text; });
+        };
+
+        runTimers (f, 1);
+        EXPECT_TRUE (shown ("Nessuna IR caricata"));
+
+        dynamic_cast<ParallaxStyleProcessor&> (*f.processor).loadIR (ir);
+        runTimers (f, 1);
+        EXPECT_TRUE (shown ("cab-name-test.wav"));
+        juce::Thread::sleep (200);   // let the loader thread finish before the processor goes
+    }
+    ir.deleteFile();
 }

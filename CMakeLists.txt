@@ -88,6 +88,7 @@ if (TARGET_ANAGRAM)
     # editor/GUI JUCE (vedi PARALLAXSTYLE_ANAGRAM_BUILD in PluginProcessor).
     target_sources(ParallaxStyle PRIVATE
         src/PluginProcessor.cpp
+        src/ProcessorAudio.cpp
     )
 
     target_compile_definitions(ParallaxStyle PRIVATE
@@ -140,6 +141,7 @@ else()
 
     target_sources(ParallaxStyle PRIVATE
         src/PluginProcessor.cpp
+        src/ProcessorAudio.cpp
         src/PluginEditor.cpp
         src/SpectrumAnalyzer.cpp
         src/SpectrumView.cpp
@@ -149,9 +151,17 @@ else()
         PARALLAXSTYLE_ANAGRAM_BUILD=0
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        JUCE_USE_OGGVORBIS=0            # IR files are WAV, AIFF or FLAC: no Ogg decoder
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_MODAL_LOOPS_PERMITTED=0
     )
+
+    # Release binaries without the symbol table on Linux (the exported VST3 entry
+    # points stay): about 17 percent smaller, nothing changes at run time
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(ParallaxStyle_VST3 PRIVATE $<$<CONFIG:Release>:-s>)
+        target_link_options(ParallaxStyle_Standalone PRIVATE $<$<CONFIG:Release>:-s>)
+    endif()
 
     target_link_libraries(ParallaxStyle PRIVATE
         juce::juce_audio_utils

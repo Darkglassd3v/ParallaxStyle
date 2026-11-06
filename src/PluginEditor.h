@@ -78,8 +78,13 @@ public:
     explicit TunerComponent (ParallaxStyleProcessor& p);
     void paint (juce::Graphics&) override;
 
+    // Legge i campioni e aggiorna nota, cent e descrizione accessibile
+    // ("A2, +3 cent", vuota senza nota, "Tuner off"); il timer lo fa a 20 Hz.
+    void update();
+
 private:
-    void timerCallback() override;
+    void timerCallback() override { update(); }
+    void setShown (const juce::String& description);
 
     ParallaxStyleProcessor& processor;
     std::atomic<float>* pTunerOn = nullptr;
@@ -192,7 +197,16 @@ private:
     using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    void timerCallback() override;   // meter + nome dell'IR
+public:
+    // Meter e nome dell'IR; il timer lo fa a 30 Hz
+    void refreshIndicators();
+
+private:
+    void timerCallback() override { refreshIndicators(); }
+    void setupHeader();       // titolo, versione, preset, reset
+    void setupPages();        // BANDS, EQ, CAB
+    void setupFooter();       // ingresso, meter, tuner, uscita
+    void attachParameters();
 
     ParallaxStyleProcessor& processor;
     ParallaxLookAndFeel lnf;

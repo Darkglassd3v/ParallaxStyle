@@ -284,3 +284,60 @@ TEST_F (AnalyzerTapTest, StaysOnWhileAnyEditorIsOpen)
     runSine (*p, 110.0f, 0.5f, 4800, 480);
     EXPECT_EQ (px.readAnalyzerInput (dest.data(), (int) dest.size()), 0);
 }
+
+//==============================================================================
+namespace
+{
+    juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, int clicks = 1)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), pos, juce::ModifierKeys(),
+                                 juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation,
+                                 juce::MouseInputSource::defaultRotation, juce::MouseInputSource::defaultTiltX,
+                                 juce::MouseInputSource::defaultTiltY, &c, &c, now, pos, now, clicks, false);
+    }
+}
+
+TEST_F (SpectrumViewTest, TheMouseDragsAHandleAndShowsTheResizeCursorOverIt)
+{
+    const FrequencyAxis axis { (float) view->getWidth() };
+    const auto handle = view->handlePosition ("highfreq");
+
+    view->mouseMove (mouseAt (*view, handle));
+    EXPECT_EQ (view->getMouseCursor(), juce::MouseCursor (juce::MouseCursor::LeftRightResizeCursor));
+
+    view->mouseDown (mouseAt (*view, handle));
+    view->mouseDrag (mouseAt (*view, { axis.xForFrequency (1000.0f), handle.y }));
+    view->mouseUp (mouseAt (*view, { axis.xForFrequency (1000.0f), handle.y }));
+    EXPECT_NEAR (getParam (*processor, "highfreq"), 1000.0f, 20.0f);
+
+    view->mouseMove (mouseAt (*view, { 3.0f, 3.0f }));
+    EXPECT_EQ (view->getMouseCursor(), juce::MouseCursor (juce::MouseCursor::NormalCursor));
+    view->mouseExit (mouseAt (*view, { -5.0f, -5.0f }));
+}
+
+TEST_F (SpectrumViewTest, DoubleClickingAHandleRestoresItsDefault)
+{
+    setParam (*processor, "lowfreq", 333.0f);
+    view->mouseDoubleClick (mouseAt (*view, view->handlePosition ("lowfreq"), 2));
+    EXPECT_NEAR (getParam (*processor, "lowfreq"), 200.0f, 0.5f);
+
+    view->mouseDoubleClick (mouseAt (*view, { 3.0f, 3.0f }, 2));   // away from the handles: nothing
+    EXPECT_NEAR (getParam (*processor, "lowfreq"), 200.0f, 0.5f);
+}
+
+TEST_F (SpectrumViewTest, DrawsTheEqCurveOnlyWhenTheEqIsInUse)
+{
+    view->refresh();
+    const auto flat = view->createComponentSnapshot (view->getLocalBounds());
+    setParam (*processor, "eqm1gain", -9.0f);
+    setParam (*processor, "eqhigain", 6.0f);
+    view->refresh();
+    const auto shaped = view->createComponentSnapshot (view->getLocalBounds());
+
+    int different = 0;
+    for (int y = 0; y < flat.getHeight(); ++y)
+        for (int x = 0; x < flat.getWidth(); ++x)
+            different += flat.getPixelAt (x, y) != shaped.getPixelAt (x, y) ? 1 : 0;
+    EXPECT_GT (different, 500);   // the curve is drawn across the view
+}

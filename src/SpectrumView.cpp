@@ -95,9 +95,17 @@ void SpectrumView::dragTo (float x)
 {
     if (dragging < 0)
         return;
-    auto& param = *handles[(size_t) dragging].param;
+    auto& handle = handles[(size_t) dragging];
     const FrequencyAxis axis { (float) getWidth() };
-    param.setValueNotifyingHost (param.convertTo0to1 (axis.frequencyForX (x)));   // fuori range: si ferma al limite
+    float hz = axis.frequencyForX (x);
+
+    // la banda MID non si rovescia: TO resta sopra FROM e FROM sotto TO
+    if (juce::String (handle.paramId) == "midto")
+        hz = juce::jmax (hz, valueOf (*handles[1].param) + 1.0f);
+    else if (juce::String (handle.paramId) == "midfrom")
+        hz = juce::jmin (hz, valueOf (*handles[2].param) - 1.0f);
+
+    handle.param->setValueNotifyingHost (handle.param->convertTo0to1 (hz));   // fuori range: si ferma al limite
     repaint();
 }
 
@@ -258,12 +266,27 @@ void SpectrumView::drawBand (juce::Graphics& g, float fromHz, float toHz, juce::
 void SpectrumView::paint (juce::Graphics& g)
 {
     const auto bounds = getLocalBounds().toFloat();
-    const FrequencyAxis axis { bounds.getWidth() };
-    auto& vts = processor.apvts;
-    auto on = [&vts] (const char* id) { return vts.getRawParameterValue (id)->load() > 0.5f; };
-
     g.setColour (theme::surface);
     g.fillRoundedRectangle (bounds, 10.0f);
+
+    drawGrid (g);
+    drawBands (g);
+    drawSpectra (g);
+    drawHandles (g);
+
+    g.setColour (theme::border);
+    g.drawRoundedRectangle (bounds.reduced (0.5f), 10.0f, 1.0f);
+}
+
+bool SpectrumView::isOn (const char* bandSwitch) const
+{
+    return processor.apvts.getRawParameterValue (bandSwitch)->load() > 0.5f;
+}
+
+void SpectrumView::drawGrid (juce::Graphics& g) const
+{
+    const auto bounds = getLocalBounds().toFloat();
+    const FrequencyAxis axis { bounds.getWidth() };
 
     // griglia: frequenze e livelli
     g.setFont (theme::font (10.0f));
@@ -282,17 +305,23 @@ void SpectrumView::paint (juce::Graphics& g)
         g.setColour (theme::border.withAlpha (0.35f));
         g.fillRect (0.0f, yForDb (db), bounds.getWidth(), 1.0f);
     }
+}
 
-    // bande
+void SpectrumView::drawBands (juce::Graphics& g) const
+{
     const float lowFreq  = valueOf (*handles[0].param);
     const float midFrom  = valueOf (*handles[1].param);
     const float midTo    = juce::jmax (valueOf (*handles[2].param), midFrom + 1.0f);
     const float highFreq = valueOf (*handles[3].param);
-    drawBand (g, FrequencyAxis::minHz, lowFreq, theme::low, on ("lowon"));
-    drawBand (g, midFrom, midTo, theme::mid, on ("midon"));
-    drawBand (g, highFreq, FrequencyAxis::maxHz, theme::high, on ("highon"));
+    drawBand (g, FrequencyAxis::minHz, lowFreq, theme::low, isOn ("lowon"));
+    drawBand (g, midFrom, midTo, theme::mid, isOn ("midon"));
+    drawBand (g, highFreq, FrequencyAxis::maxHz, theme::high, isOn ("highon"));
+}
 
-    // spettri
+void SpectrumView::drawSpectra (juce::Graphics& g) const
+{
+    auto& vts = processor.apvts;
+
     g.setColour (theme::text.withAlpha (0.09f));
     g.fillPath (spectrumPath (inputSpectrum, true));
     g.setColour (theme::text.withAlpha (0.28f));
@@ -309,9 +338,14 @@ void SpectrumView::paint (juce::Graphics& g)
         g.setColour (theme::accent.withAlpha (0.9f));
         g.strokePath (eqCurve(), juce::PathStrokeType (1.5f));
     }
+}
+
+void SpectrumView::drawHandles (juce::Graphics& g) const
+{
+    const auto bounds = getLocalBounds().toFloat();
 
     // bordi delle bande e maniglie
-    const bool bandOn[] = { on ("lowon"), on ("midon"), on ("midon"), on ("highon") };
+    const bool bandOn[] = { isOn ("lowon"), isOn ("midon"), isOn ("midon"), isOn ("highon") };
     for (size_t i = 0; i < handles.size(); ++i)
     {
         const auto& h = handles[i];
@@ -342,7 +376,4 @@ void SpectrumView::paint (juce::Graphics& g)
         g.setColour (active ? theme::text : colour);
         g.drawText (text, pill, juce::Justification::centred);
     }
-
-    g.setColour (theme::border);
-    g.drawRoundedRectangle (bounds.reduced (0.5f), 10.0f, 1.0f);
 }
