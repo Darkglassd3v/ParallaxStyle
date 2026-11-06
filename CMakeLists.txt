@@ -15,6 +15,12 @@ option(COPY_PLUGIN "Copy plugin to system folder after build" ON)
 # directory separata (es. `build-anagram`) rispetto a quella desktop.
 option(TARGET_ANAGRAM "Build LV2 plugin for Darkglass Anagram (cross-compile only)" OFF)
 
+# Unit tests (GoogleTest + CTest) for the desktop build and for the Anagram
+# variant of the processor, compiled natively. Not available with TARGET_ANAGRAM.
+option(PARALLAXSTYLE_TESTS "Build the unit tests" OFF)
+option(PARALLAXSTYLE_SANITIZERS "Build the unit tests with AddressSanitizer and UBSan" OFF)
+option(PARALLAXSTYLE_COVERAGE "Build the unit tests with gcov coverage" OFF)
+
 include(FetchContent)
 
 if (TARGET_ANAGRAM)
@@ -136,4 +142,9 @@ else()
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
     )
+endif()
+
+if (PARALLAXSTYLE_TESTS AND NOT TARGET_ANAGRAM)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
