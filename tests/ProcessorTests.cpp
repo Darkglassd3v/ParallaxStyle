@@ -334,3 +334,127 @@ TEST_F (ProcessorTest, AMissingImpulseResponseFileIsIgnored)
     px.loadIR (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("missing.wav"));
     EXPECT_EQ (px.getIRFile(), juce::File());
 }
+
+//==============================================================================
+// Version, block sizes, smoothing and real-time safety
+//==============================================================================
+TEST_F (ProcessorTest, WritesTheVersionBannerWhenCreated)
+{
+    auto p = makePrepared();
+    EXPECT_TRUE (logContains ("ParallaxStyle " PARALLAXSTYLE_EXPECTED_VERSION));
+}
+
+TEST_F (ProcessorTest, BlocksLargerThanThePreparedSizeSoundLikeSmallBlocks)
+{
+    auto announced = makePrepared (64);
+    auto exceeded  = makePrepared (64);   // the host announced 64 samples...
+    const auto expected = runSine (*announced, 110.0f, 0.3f, 4096, 64);
+    const auto actual   = runSine (*exceeded,  110.0f, 0.3f, 4096, 1024);   // ...and sends 1024
+
+    ASSERT_EQ (actual.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i)
+        ASSERT_NEAR (actual[i], expected[i], 1.0e-4f) << "sample " << i;
+}
+
+namespace
+{
+    // A click is a sample-to-sample step after a knob change that is much larger
+    // than the steps of the signal itself, before and after the change.
+    struct KnobMove { const char* id; float from; float to; };
+
+    float clickRatio (const KnobMove& move, float frequency)
+    {
+        auto p = makePrepared (480);
+        setParam (*p, "drive", 0.0f);    // a clean signal path, where a click stands out
+        setParam (*p, move.id, move.from);
+
+        constexpr int change = 24000;
+        const auto out = runSine (*p, frequency, 0.1f, 72000, 480, 2, [&] (int pos)
+        {
+            if (pos == change)
+                setParam (*p, move.id, move.to);
+        });
+
+        const float steady = std::max (maxStep (out, 12000, change), maxStep (out, 60000, 72000));
+        const float transition = maxStep (out, change, change + 9600);
+        return transition / std::max (steady, 1.0e-6f);
+    }
+}
+
+TEST_F (ProcessorTest, TurningAKnobOrSwitchingABandDoesNotClick)
+{
+    const KnobMove moves[] = {
+        { "input", -24.0f, 24.0f },     { "gate", -80.0f, -20.0f },
+        { "lowfreq", 60.0f, 500.0f },   { "midfrom", 80.0f, 1000.0f },  { "midto", 200.0f, 5000.0f },
+        { "midgain", -24.0f, 24.0f },   { "middrive", 0.0f, 40.0f },    { "highfreq", 100.0f, 2000.0f },
+        { "comp", 0.0f, 1.0f },         { "lowsat", 0.0f, 1.0f },       { "lowlevel", -24.0f, 24.0f },
+        { "drive", 0.0f, 40.0f },       { "tone", 1000.0f, 12000.0f },  { "highlevel", -24.0f, 24.0f },
+        { "blend", 1.0f, 0.0f },        { "output", -24.0f, 24.0f },
+        { "eqlofreq", 40.0f, 250.0f },  { "eqlogain", -15.0f, 15.0f },
+        { "eqm1freq", 100.0f, 2000.0f },{ "eqm1gain", -15.0f, 15.0f },
+        { "eqm2freq", 500.0f, 8000.0f },{ "eqm2gain", -15.0f, 15.0f },
+        { "eqhifreq", 1000.0f, 12000.0f },{ "eqhigain", -15.0f, 15.0f },
+        { "lowon", 1.0f, 0.0f },  { "lowon", 0.0f, 1.0f },
+        { "midon", 1.0f, 0.0f },  { "midon", 0.0f, 1.0f },
+        { "highon", 1.0f, 0.0f }, { "highon", 0.0f, 1.0f },
+    };
+
+    // one frequency in each band: low, mid and high
+    for (float frequency : { 110.0f, 400.0f, 3000.0f })
+        for (const auto& move : moves)
+            EXPECT_LT (clickRatio (move, frequency), 3.0f)
+                << move.id << " " << move.from << " -> " << move.to << " at " << frequency << " Hz";
+}
+
+TEST_F (ProcessorTest, SteadyProcessingDoesNotAllocateOnTheAudioThread)
+{
+    auto p = makePrepared (512);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    fillSine (buffer, 110.0f, 0.3f);
+    p->processBlock (buffer, midi);
+
+    alloc::ScopedAllocationCount allocations;
+    for (int i = 0; i < 20; ++i)
+        p->processBlock (buffer, midi);
+    EXPECT_EQ (allocations.count(), 0);
+}
+
+TEST_F (ProcessorTest, MovingAnyParameterDoesNotAllocateOnTheAudioThread)
+{
+    auto p = makePrepared (512);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    fillSine (buffer, 110.0f, 0.3f);
+    p->processBlock (buffer, midi);
+
+    juce::Random random (1234);
+    for (auto* param : p->getParameters())
+    {
+        param->setValueNotifyingHost (random.nextFloat());
+
+        alloc::ScopedAllocationCount allocations;
+        p->processBlock (buffer, midi);
+        EXPECT_EQ (allocations.count(), 0) << param->getName (32);
+    }
+}
+
+TEST_F (ProcessorTest, AfterAResetTwoInstancesFedTheSameSignalGiveTheSameOutput)
+{
+    // Anagram runs two mono instances side by side and resets them together
+    // (kx:Reset): from then on they must stay in sync sample by sample.
+    auto a = makePrepared (128, 1);
+    auto b = makePrepared (128, 1);
+    setParam (*a, "comp", 0.8f);
+    setParam (*b, "comp", 0.8f);
+    runSine (*a, 110.0f, 0.6f, 9600, 128, 1);   // different histories...
+    runSine (*b, 70.0f, 0.2f, 4800, 128, 1);
+
+    a->reset();
+    b->reset();
+
+    const auto outA = runSine (*a, 110.0f, 0.3f, 9600, 128, 1);   // ...same input after the reset
+    const auto outB = runSine (*b, 110.0f, 0.3f, 9600, 128, 1);
+    for (size_t i = 0; i < outA.size(); ++i)
+        ASSERT_NEAR (outA[i], outB[i], 1.0e-6f) << "sample " << i;
+}

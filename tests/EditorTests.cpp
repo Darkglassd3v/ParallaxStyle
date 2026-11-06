@@ -100,3 +100,36 @@ TEST_F (EditorTest, LevelMeterPaintsAtEveryLevel)
         EXPECT_TRUE (meter.createComponentSnapshot (meter.getLocalBounds()).isValid());
     }
 }
+
+TEST_F (EditorTest, ShowsTheVersionOfTheBuild)
+{
+    EditorFixture f;
+    std::vector<juce::Label*> labels;
+    collect (*f.editor, labels);
+
+    const bool shown = std::any_of (labels.begin(), labels.end(), [] (juce::Label* l)
+    {
+        return l->isVisible() && l->getText() == "v" PARALLAXSTYLE_EXPECTED_VERSION;
+    });
+    EXPECT_TRUE (shown);
+}
+
+TEST_F (EditorTest, ClipLightTurnsOffAboutOneSecondAfterTheLastClipWhileTheLevelStaysSteady)
+{
+    LevelMeter meter;
+    meter.setSize (120, 16);
+
+    auto clipLightIsOn = [&meter]
+    {
+        const auto image = meter.createComponentSnapshot (meter.getLocalBounds());
+        const auto pixel = image.getPixelAt (meter.getWidth() - 4, meter.getHeight() / 2);
+        return pixel.getRed() > 0xc0 && pixel.getGreen() < 0x60;
+    };
+
+    meter.pushLevel (1.2f);                 // one clip...
+    EXPECT_TRUE (clipLightIsOn());
+
+    for (int frame = 0; frame < 45; ++frame)   // ...then 1.5 s at a steady -10 dBFS (30 fps)
+        meter.pushLevel (0.3f);
+    EXPECT_FALSE (clipLightIsOn());
+}
