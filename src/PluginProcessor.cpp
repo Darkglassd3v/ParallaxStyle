@@ -103,7 +103,11 @@ ParallaxStyleProcessor::ParallaxStyleProcessor()
     pEqHiG     = apvts.getRawParameterValue ("eqhigain");
 #if PARALLAXSTYLE_ANAGRAM_BUILD
     bypassParam = apvts.getParameter ("bypass");
+    pBypass     = apvts.getRawParameterValue ("bypass");
 #endif
+
+    // banner con la versione: lo Standalone lo scrive in console all'avvio
+    juce::Logger::writeToLog ("ParallaxStyle " JucePlugin_VersionString);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -227,8 +231,11 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
 {
     juce::dsp::ProcessSpec spec;
     spec.sampleRate       = sampleRate;
-    spec.maximumBlockSize = (juce::uint32) samplesPerBlock;
+    spec.maximumBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
     spec.numChannels      = (juce::uint32) getTotalNumOutputChannels();
+
+    currentSampleRate = sampleRate;
+    maxBlockSize      = (int) spec.maximumBlockSize;
 
     inputGain.prepare (spec);
     inputGain.setRampDurationSeconds (0.02);
@@ -238,10 +245,6 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     gateOpenCoeff   = std::exp (-1.0f / (float) (0.0005 * sampleRate)); // apertura 0.5 ms
     gateCloseCoeff  = std::exp (-1.0f / (float) (0.020 * sampleRate));  // chiusura 20 ms
     gateHoldSamples = (int) (0.040 * sampleRate);                       // hold 40 ms
-    gateEnvelope = 0.0f;
-    gateGainState = 1.0f;
-    gateHoldCount = 0;
-    gateIsOpen = true;
 
     lowpass.prepare (spec);
     lowpass.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
@@ -261,7 +264,6 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     compressor.prepare (spec);
     compressor.setAttack (5.0f);
     compressor.setRelease (100.0f);
-    compressor.setRatio (8.0f);
 
     lowGain.prepare (spec);
     lowGain.setRampDurationSeconds (0.02);
@@ -288,21 +290,62 @@ void ParallaxStyleProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     dryWet.prepare (spec);
     dryWet.setMixingRule (juce::dsp::DryWetMixingRule::linear);
 
-    currentSampleRate = sampleRate;
     eqLo.prepare (spec);
     eqM1.prepare (spec);
     eqM2.prepare (spec);
     eqHi.prepare (spec);
-    for (auto& c : eqCache) c = -1e9f;   // forza il primo update
-    updateEqCoefficients();
 
-    lowBuffer.setSize  ((int) spec.numChannels, samplesPerBlock);
-    midBuffer.setSize  ((int) spec.numChannels, samplesPerBlock);
-    highBuffer.setSize ((int) spec.numChannels, samplesPerBlock);
+    lowBuffer.setSize    ((int) spec.numChannels, maxBlockSize);
+    midBuffer.setSize    ((int) spec.numChannels, maxBlockSize);
+    midDryBuffer.setSize ((int) spec.numChannels, maxBlockSize);
+    highBuffer.setSize   ((int) spec.numChannels, maxBlockSize);
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    bypassBuffer.setSize ((int) spec.numChannels, maxBlockSize);
+#endif
+
+    forEachSmoother ([sampleRate] (auto& s) { s.reset (sampleRate, smoothingSeconds); });
+    updateTargets();
+    reset();
 
 #if ! PARALLAXSTYLE_ANAGRAM_BUILD
     tunerSampleRate = sampleRate / (double) tunerDecimation;
 #endif
+}
+
+void ParallaxStyleProcessor::reset()
+{
+    // Tutto lo stato interno torna a zero e ogni rampa salta al suo valore finale:
+    // due istanze resettate insieme (kx:Reset su Anagram, due mono affiancate)
+    // da qui in poi danno la stessa uscita per lo stesso ingresso.
+    inputGain.reset();
+    lowpass.reset();
+    highpass.reset();
+    midHighpass.reset();
+    midLowpass.reset();
+    compressor.reset();
+    lowGain.reset();
+    midGain.reset();
+    driveGain.reset();
+    toneFilter.reset();
+    highGain.reset();
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    convolution.reset();
+    cabGain.reset();
+#endif
+    outputGain.reset();
+    dryWet.reset();
+    eqLo.reset();
+    eqM1.reset();
+    eqM2.reset();
+    eqHi.reset();
+
+    gateEnvelope  = 0.0f;
+    gateGainState = 1.0f;
+    gateHoldCount = 0;
+    gateIsOpen    = true;
+
+    forEachSmoother ([] (auto& s) { s.setCurrentAndTargetValue (s.getTargetValue()); });
+    updateEqCoefficients();
 }
 
 bool ParallaxStyleProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -371,88 +414,185 @@ void ParallaxStyleProcessor::accumulatePeak (std::atomic<float>& target,
 }
 
 //==============================================================================
+void ParallaxStyleProcessor::updateTargets()
+{
+    lowFreqS.setTargetValue  (pLowFreq->load());
+    midFromS.setTargetValue  (pMidFrom->load());
+    midToS.setTargetValue    (pMidTo->load());
+    highFreqS.setTargetValue (pHighFreq->load());
+    toneS.setTargetValue     (pTone->load());
+    compS.setTargetValue     (pComp->load());
+    lowSatS.setTargetValue   (pLowSat->load());
+
+    const float midDrive = pMidDrive->load();
+    midDriveS.setTargetValue (midDrive);
+    midMixS.setTargetValue   (midDrive > 0.01f ? 1.0f : 0.0f);   // sotto 0.01 dB shaper escluso
+
+    std::atomic<float>* const eqFreqs[] = { pEqLoF, pEqM1F, pEqM2F, pEqHiF };
+    std::atomic<float>* const eqGains[] = { pEqLoG, pEqM1G, pEqM2G, pEqHiG };
+    for (size_t i = 0; i < 4; ++i)
+    {
+        eqFreqS[i].setTargetValue (eqFreqs[i]->load());
+        eqGainS[i].setTargetValue (eqGains[i]->load());
+    }
+
+    lowOnS.setTargetValue  (pLowOn->load()  > 0.5f ? 1.0f : 0.0f);
+    midOnS.setTargetValue  (pMidOn->load()  > 0.5f ? 1.0f : 0.0f);
+    highOnS.setTargetValue (pHighOn->load() > 0.5f ? 1.0f : 0.0f);
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    bypassS.setTargetValue (pBypass->load() > 0.5f ? 1.0f : 0.0f);
+#endif
+
+    // i Gain hanno già la loro rampa interna, campione per campione
+    inputGain.setGainDecibels  (pInput->load());
+    lowGain.setGainDecibels    (pLowLevel->load());
+    midGain.setGainDecibels    (pMidGain->load());
+    driveGain.setGainDecibels  (pDrive->load());
+    highGain.setGainDecibels   (pHighLevel->load());
+    outputGain.setGainDecibels (pOutput->load());
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    cabGain.setGainDecibels    (pCabLevel->load());
+#endif
+    dryWet.setWetMixProportion (pBlend->load());
+}
+
+bool ParallaxStyleProcessor::anySmoothing() const noexcept
+{
+    bool smoothing = false;
+    const_cast<ParallaxStyleProcessor*> (this)->forEachSmoother ([&smoothing] (auto& s)
+    {
+        smoothing = smoothing || s.isSmoothing();
+    });
+    return smoothing;
+}
+
 void ParallaxStyleProcessor::updateEqCoefficients()
 {
-    using Coeffs = juce::dsp::IIR::Coefficients<float>;
+    using Coeffs = juce::dsp::IIR::ArrayCoefficients<float>;
     constexpr float q = 0.8f;
 
-    const float vals[8] = { pEqLoF->load(), pEqLoG->load(),
-                            pEqM1F->load(), pEqM1G->load(),
-                            pEqM2F->load(), pEqM2G->load(),
-                            pEqHiF->load(), pEqHiG->load() };
+    auto gain = [this] (size_t i) { return juce::Decibels::decibelsToGain (eqGainS[i].getCurrentValue()); };
 
-    bool changed = false;
-    for (int i = 0; i < 8; ++i)
-        if (vals[i] != eqCache[i]) { changed = true; break; }
-
-    if (! changed)
-        return;
-
-    for (int i = 0; i < 8; ++i) eqCache[i] = vals[i];
-
-    // I make* riallocano: eseguiti solo quando un valore cambia davvero
-    *eqLo.state = *Coeffs::makeLowShelf  (currentSampleRate, vals[0], q,
-                                          juce::Decibels::decibelsToGain (vals[1]));
-    *eqM1.state = *Coeffs::makePeakFilter (currentSampleRate, vals[2], q,
-                                          juce::Decibels::decibelsToGain (vals[3]));
-    *eqM2.state = *Coeffs::makePeakFilter (currentSampleRate, vals[4], q,
-                                          juce::Decibels::decibelsToGain (vals[5]));
-    *eqHi.state = *Coeffs::makeHighShelf (currentSampleRate, vals[6], q,
-                                          juce::Decibels::decibelsToGain (vals[7]));
+    // ArrayCoefficients non allocano: si possono ricalcolare nel thread audio
+    *eqLo.state = Coeffs::makeLowShelf   (currentSampleRate, eqFreqS[0].getCurrentValue(), q, gain (0));
+    *eqM1.state = Coeffs::makePeakFilter (currentSampleRate, eqFreqS[1].getCurrentValue(), q, gain (1));
+    *eqM2.state = Coeffs::makePeakFilter (currentSampleRate, eqFreqS[2].getCurrentValue(), q, gain (2));
+    *eqHi.state = Coeffs::makeHighShelf  (currentSampleRate, eqFreqS[3].getCurrentValue(), q, gain (3));
 }
 
 //==============================================================================
+namespace
+{
+    // Compressore da basso "spremuto": il knob 0..1 spinge threshold giù fino a
+    // -50 dB, ratio da 2:1 fino a 12:1, e applica makeup gain automatica così la
+    // riduzione si SENTE come densità, non come semplice attenuazione.
+    float compThresholdDb (float comp) noexcept { return juce::jmap (comp, 0.0f, 1.0f, 0.0f, -50.0f); }
+    float compRatio       (float comp) noexcept { return juce::jmap (comp, 0.0f, 1.0f, 2.0f, 12.0f); }
+
+    // makeup ~ metà della riduzione max teorica al threshold
+    float compMakeupDb (float comp) noexcept
+    {
+        return comp * (-compThresholdDb (comp)) * (1.0f - 1.0f / compRatio (comp)) * 0.6f;
+    }
+
+    // Applica a ogni canale un guadagno 0..1 che va da `from` a `to` nel blocco.
+    void applyFade (juce::AudioBuffer<float>& b, int numSamples, float from, float to)
+    {
+        if (from < 1.0f || to < 1.0f)
+            b.applyGainRamp (0, numSamples, from, to);
+    }
+}
+
 void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                            juce::MidiBuffer&)
 {
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    // Su Anagram i registri flush-to-zero li imposta l'host: un plugin non deve toccarli.
     juce::ScopedNoDenormals noDenormals;
+#endif
 
+    updateTargets();
+
+    // L'host può mandare blocchi più grandi di quelli annunciati in prepareToPlay:
+    // si elaborano a pezzi. Mentre un parametro scorre verso il nuovo valore i pezzi
+    // sono brevi, così filtri, compressore ed EQ seguono la rampa senza scatti.
+    const int numSamples = buffer.getNumSamples();
+    for (int start = 0; start < numSamples;)
+    {
+        const int length = juce::jmin (numSamples - start,
+                                       anySmoothing() ? smoothingChunk : maxBlockSize);
+        juce::AudioBuffer<float> chunk (buffer.getArrayOfWritePointers(),
+                                        buffer.getNumChannels(), start, length);
+        processChunk (chunk);
+        start += length;
+    }
+}
+
+void ParallaxStyleProcessor::processChunk (juce::AudioBuffer<float>& buffer)
+{
     const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
 
-    // --- parametri ---
-    const float lowFreq   = pLowFreq->load();
-    const float midFrom   = pMidFrom->load();
-    const float midTo     = juce::jmax (pMidTo->load(), midFrom + 1.0f);  // banda mai invertita
-    const float highFreq  = pHighFreq->load();
-    const float comp      = pComp->load();
-    const float lowSat    = pLowSat->load();
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    // Bypass morbido richiesto da Anagram (lv2:enabled): dissolvenza di 50 ms
+    // tra il segnale elaborato e l'ingresso; a bypass completo nessuna elaborazione.
+    const float bypassFrom = bypassS.getCurrentValue();
+    const float bypassTo   = bypassS.skip (numSamples);
+    if (bypassFrom >= 1.0f && bypassTo >= 1.0f)
+    {
+        accumulatePeak (inputPeak, buffer);
+        accumulatePeak (outputPeak, buffer);
+        return;
+    }
+    const bool bypassFading = bypassFrom > 0.0f || bypassTo > 0.0f;
+    if (bypassFading)
+        for (int ch = 0; ch < numChannels; ++ch)
+            bypassBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+#endif
+
+    // --- parametri: valore delle rampe a fine pezzo ---
+    const bool  eqMoving  = std::any_of (eqFreqS.begin(), eqFreqS.end(), [] (auto& s) { return s.isSmoothing(); })
+                         || std::any_of (eqGainS.begin(), eqGainS.end(), [] (auto& s) { return s.isSmoothing(); });
+    for (auto& s : eqFreqS) s.skip (numSamples);
+    for (auto& s : eqGainS) s.skip (numSamples);
+    if (eqMoving)
+        updateEqCoefficients();
+
+    const float lowFreq   = lowFreqS.skip (numSamples);
+    const float midFrom   = midFromS.skip (numSamples);
+    const float midTo     = juce::jmax (midToS.skip (numSamples), midFrom + 1.0f);  // banda mai invertita
+    const float highFreq  = highFreqS.skip (numSamples);
+    const float tone      = toneS.skip (numSamples);
+    const float compFrom  = compS.getCurrentValue();
+    const float comp      = compS.skip (numSamples);
+    const float satFrom   = lowSatS.getCurrentValue();
+    const float lowSat    = lowSatS.skip (numSamples);
+    const float driveFrom = midDriveS.getCurrentValue();
+    const float midDrive  = midDriveS.skip (numSamples);
+    const float mixFrom   = midMixS.getCurrentValue();
+    const float midMix    = midMixS.skip (numSamples);
+    const float lowFrom   = lowOnS.getCurrentValue();
+    const float lowOn     = lowOnS.skip (numSamples);
+    const float midFromOn = midOnS.getCurrentValue();
+    const float midOn     = midOnS.skip (numSamples);
+    const float highFrom  = highOnS.getCurrentValue();
+    const float highOn    = highOnS.skip (numSamples);
+
     const int   character = (int) pCharacter->load();
+    const int   midChar   = (int) pMidChar->load();
 #if ! PARALLAXSTYLE_ANAGRAM_BUILD
     const int   cabMode   = (int) pCab->load();
     const bool  tunerOn   = pTunerOn->load() > 0.5f;
 #endif
-    const bool  lowOn     = pLowOn->load()  > 0.5f;
-    const bool  midOn     = pMidOn->load()  > 0.5f;
-    const bool  highOn    = pHighOn->load() > 0.5f;
-
-    inputGain.setGainDecibels (pInput->load());
     const float gateThLin = juce::Decibels::decibelsToGain (pGate->load());
-#if ! PARALLAXSTYLE_ANAGRAM_BUILD
-    cabGain.setGainDecibels (pCabLevel->load());
-#endif
+
     lowpass.setCutoffFrequency     (lowFreq);
     midHighpass.setCutoffFrequency (midFrom);
     midLowpass.setCutoffFrequency  (midTo);
     highpass.setCutoffFrequency    (highFreq);
-    // Compressore da basso "spremuto": il knob 0..1 spinge threshold giù fino a
-    // -50 dB, ratio da 2:1 fino a 12:1, e applica makeup gain automatica così la
-    // riduzione si SENTE come densità, non come semplice attenuazione.
-    const float compThreshold = juce::jmap (comp, 0.0f, 1.0f, 0.0f, -50.0f);
-    const float compRatio     = juce::jmap (comp, 0.0f, 1.0f, 2.0f, 12.0f);
-    compressor.setThreshold (compThreshold);
-    compressor.setRatio (compRatio);
-    // makeup ~ metà della riduzione max teorica al threshold
-    const float compMakeup = comp * (-compThreshold) * (1.0f - 1.0f / compRatio) * 0.6f;
-    lowGain.setGainDecibels  (pLowLevel->load());
-    midGain.setGainDecibels  (pMidGain->load());
-    const float midDrive   = pMidDrive->load();
-    const int   midChar    = (int) pMidChar->load();
-    driveGain.setGainDecibels (pDrive->load());
-    toneFilter.setCutoffFrequency (pTone->load());
-    highGain.setGainDecibels (pHighLevel->load());
-    outputGain.setGainDecibels (pOutput->load());
-    dryWet.setWetMixProportion (pBlend->load());
+    toneFilter.setCutoffFrequency  (tone);
+    compressor.setThreshold (compThresholdDb (comp));
+    compressor.setRatio (compRatio (comp));
 
     juce::dsp::AudioBlock<float> mainBlock (buffer);
     juce::dsp::ProcessContextReplacing<float> mainCtx (mainBlock);
@@ -524,30 +664,39 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::dsp::ProcessContextReplacing<float> midCtx  (midBlock);
     juce::dsp::ProcessContextReplacing<float> highCtx (highBlock);
 
+    // Ogni banda si spegne e si riaccende con una dissolvenza; spenta del tutto
+    // non viene elaborata.
+
     // --- LOW BAND ---
-    if (lowOn)
+    if (lowFrom > 0.0f || lowOn > 0.0f)
     {
         lowpass.process (lowCtx);
         compressor.process (lowCtx);
 
-        if (compMakeup > 0.01f)
-            lowBuffer.applyGain (juce::Decibels::decibelsToGain (compMakeup));
+        const float makeupFrom = compMakeupDb (compFrom);
+        const float makeup     = compMakeupDb (comp);
+        if (makeupFrom > 0.01f || makeup > 0.01f)
+            lowBuffer.applyGainRamp (0, numSamples, juce::Decibels::decibelsToGain (makeupFrom),
+                                                    juce::Decibels::decibelsToGain (makeup));
 
-        if (lowSat > 0.0f)
+        if (satFrom > 0.0f || lowSat > 0.0f)
         {
-            const float satDrive = 1.0f + lowSat * 4.0f;
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 float* d = lowBuffer.getWritePointer (ch);
                 for (int i = 0; i < numSamples; ++i)
                 {
+                    const float s = satFrom == lowSat ? lowSat
+                                  : satFrom + (lowSat - satFrom) * (float) (i + 1) / (float) numSamples;
+                    const float satDrive = 1.0f + s * 4.0f;
                     const float x = d[i];
-                    d[i] = x + lowSat * (softSat (x * satDrive) - x);
+                    d[i] = x + s * (softSat (x * satDrive) - x);
                 }
             }
         }
 
         lowGain.process (lowCtx);
+        applyFade (lowBuffer, numSamples, lowFrom, lowOn);
     }
     else
     {
@@ -555,25 +704,44 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     // --- MID BAND: filtri, distorsione opzionale, boost/cut ---
-    if (midOn)
+    if (midFromOn > 0.0f || midOn > 0.0f)
     {
         midHighpass.process (midCtx);
         midLowpass.process  (midCtx);
 
-        if (midDrive > 0.01f)
+        if (mixFrom > 0.0f || midMix > 0.0f)
         {
-            const float driveLin = juce::Decibels::decibelsToGain (midDrive);
-            const float comp = 1.0f / std::sqrt (driveLin);   // compensa il boost di drive
+            // drive e compensazione seguono la rampa; lo shaper entra ed esce in
+            // dissolvenza invece di scattare a 0.01 dB
+            const bool crossfade = mixFrom < 1.0f || midMix < 1.0f;
+            if (crossfade)
+                for (int ch = 0; ch < numChannels; ++ch)
+                    midDryBuffer.copyFrom (ch, 0, midBuffer, ch, 0, numSamples);
+
+            const float driveLinFrom = juce::Decibels::decibelsToGain (driveFrom);
+            const float driveLin     = juce::Decibels::decibelsToGain (midDrive);
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 float* d = midBuffer.getWritePointer (ch);
-                for (int i = 0; i < numSamples; ++i) d[i] *= driveLin;
+                midBuffer.applyGainRamp (ch, 0, numSamples, driveLinFrom, driveLin);
                 applyShaper (d, numSamples, midChar);
-                for (int i = 0; i < numSamples; ++i) d[i] *= comp;
+                // compensa il boost di drive
+                midBuffer.applyGainRamp (ch, 0, numSamples, 1.0f / std::sqrt (driveLinFrom),
+                                                            1.0f / std::sqrt (driveLin));
+                if (crossfade)
+                {
+                    const float* dry = midDryBuffer.getReadPointer (ch);
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        const float m = mixFrom + (midMix - mixFrom) * (float) (i + 1) / (float) numSamples;
+                        d[i] = dry[i] + m * (d[i] - dry[i]);
+                    }
+                }
             }
         }
 
         midGain.process (midCtx);
+        applyFade (midBuffer, numSamples, midFromOn, midOn);
     }
     else
     {
@@ -581,7 +749,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     // --- HIGH BAND ---
-    if (highOn)
+    if (highFrom > 0.0f || highOn > 0.0f)
     {
         highpass.process (highCtx);
         driveGain.process (highCtx);
@@ -600,6 +768,7 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 #endif
 
         highGain.process (highCtx);
+        applyFade (highBuffer, numSamples, highFrom, highOn);
     }
     else
     {
@@ -623,7 +792,6 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 #endif
 
     // --- EQ post sul mix globale ---
-    updateEqCoefficients();
     eqLo.process (mainCtx);
     eqM1.process (mainCtx);
     eqM2.process (mainCtx);
@@ -632,6 +800,22 @@ void ParallaxStyleProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // --- master ---
     outputGain.process (mainCtx);
     dryWet.mixWetSamples (mainBlock);
+
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    if (bypassFading)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            float* d = buffer.getWritePointer (ch);
+            const float* in = bypassBuffer.getReadPointer (ch);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float m = bypassFrom + (bypassTo - bypassFrom) * (float) (i + 1) / (float) numSamples;
+                d[i] += m * (in[i] - d[i]);
+            }
+        }
+    }
+#endif
 
     accumulatePeak (outputPeak, buffer);
 }

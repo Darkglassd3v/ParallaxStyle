@@ -4,7 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 //==============================================================================
-// ParallaxStyle v1.2 — parallel bass processor
+// ParallaxStyle — parallel bass processor
 //
 //   input ─► Input Gain ──┬── LR4 LP ─► Comp ─► Sat ─► Low Lvl ──────────────┐
 //        (meter in, tuner)│                                                   ├─► Σ ─► [IR: Full] ─► Output ─► Blend ─► (meter out)
@@ -18,6 +18,7 @@ public:
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
+    void reset() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -25,6 +26,8 @@ public:
     bool hasEditor() const override                       { return ! PARALLAXSTYLE_ANAGRAM_BUILD; }
 
     const juce::String getName() const override           { return "ParallaxStyle"; }
+    // Anagram prende la prima voce di 2-3 maiuscole come dg:abbreviation
+    juce::StringArray getAlternateDisplayNames() const override { return { "ParallaxStyle", "PLX" }; }
     bool acceptsMidi() const override                     { return false; }
     bool producesMidi() const override                    { return false; }
     bool isMidiEffect() const override                    { return false; }
@@ -81,6 +84,40 @@ private:
 #endif
     static void accumulatePeak (std::atomic<float>& target, const juce::AudioBuffer<float>& buf);
 
+    void updateTargets();
+    bool anySmoothing() const noexcept;
+    void processChunk (juce::AudioBuffer<float>& chunk);
+
+    // Rampe dei parametri che non hanno uno smoothing proprio (filtri, compressore,
+    // saturazione, drive dei medi, EQ, accensione delle bande, bypass): 50 ms,
+    // applicate a pezzi di 8 campioni mentre scorrono (con 16 il biquad dello
+    // shelf alto scattava ancora: 5.4 volte il passo del segnale a 110 Hz).
+    static constexpr double smoothingSeconds = 0.05;
+    static constexpr int    smoothingChunk   = 8;
+    using Linear      = juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>;
+    using Exponential = juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative>;
+    Exponential lowFreqS, midFromS, midToS, highFreqS, toneS;
+    std::array<Exponential, 4> eqFreqS;
+    std::array<Linear, 4> eqGainS;
+    Linear compS, lowSatS, midDriveS, midMixS, lowOnS, midOnS, highOnS;
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    Linear bypassS;
+#endif
+
+    template <typename Fn>
+    void forEachSmoother (Fn&& fn)
+    {
+        for (auto* s : { &lowFreqS, &midFromS, &midToS, &highFreqS, &toneS }) fn (*s);
+        for (auto& s : eqFreqS) fn (s);
+        for (auto& s : eqGainS) fn (s);
+        for (auto* s : { &compS, &lowSatS, &midDriveS, &midMixS, &lowOnS, &midOnS, &highOnS }) fn (*s);
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+        fn (bypassS);
+#endif
+    }
+
+    int maxBlockSize = 512;
+
     juce::dsp::Gain<float> inputGain;
 
     // Hard gate custom: sotto soglia il segnale viene azzerato.
@@ -119,10 +156,13 @@ private:
                                                      juce::dsp::IIR::Coefficients<float>>;
     StereoIIR eqLo, eqM1, eqM2, eqHi;
     double currentSampleRate = 48000.0;
-    float eqCache[8] = { -1e9f, -1e9f, -1e9f, -1e9f, -1e9f, -1e9f, -1e9f, -1e9f };
     void updateEqCoefficients();
 
-    juce::AudioBuffer<float> lowBuffer, midBuffer, highBuffer;
+    juce::AudioBuffer<float> lowBuffer, midBuffer, midDryBuffer, highBuffer;
+#if PARALLAXSTYLE_ANAGRAM_BUILD
+    juce::AudioBuffer<float> bypassBuffer;   // ingresso, per la dissolvenza del bypass
+    std::atomic<float>* pBypass = nullptr;
+#endif
 
     // Meters
     std::atomic<float> inputPeak  { 0.0f };
