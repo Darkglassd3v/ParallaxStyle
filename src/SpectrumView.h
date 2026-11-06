@@ -23,8 +23,10 @@ public:
     void dragTo (float x);
     void endDrag();
 
-    // Legge i campioni dal processor e ricalcola gli spettri (il timer lo fa a 30 Hz)
-    void refresh();
+    // Legge i campioni dal processor e ricalcola gli spettri (il timer lo fa a 30 Hz).
+    // Ridisegna solo se gli spettri o i parametri mostrati sono cambiati, e lo dice:
+    // a riposo, senza segnale, la grafica non costa nulla.
+    bool refresh();
 
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
@@ -56,6 +58,8 @@ private:
     SpectrumAnalyzer inputSpectrum, outputSpectrum;
     std::vector<float> scratch = std::vector<float> (16384, 0.0f);
     std::vector<Handle> handles;
+    std::vector<float> shownParameters;   // quelli disegnati: se cambiano si ridisegna
+    std::vector<float> readShownParameters() const;
     int dragging = -1, hovered = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpectrumView)

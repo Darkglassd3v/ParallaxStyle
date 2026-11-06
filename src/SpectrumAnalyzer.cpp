@@ -28,12 +28,20 @@ bool SpectrumAnalyzer::update()
 
     // Hann non normalizzata: una sinusoide di ampiezza A dà A * size / 4
     const float toUnit = 4.0f / (float) size;
+    bool changed = false;
     for (size_t k = 0; k < levels.size(); ++k)
     {
         const float db = juce::jmax (floorDb, juce::Decibels::gainToDecibels (fftData[k] * toUnit, floorDb));
-        levels[k] = juce::jmax (db, levels[k] - fallDbPerUpdate);
+        const float level = juce::jmax (db, levels[k] - fallDbPerUpdate);
+        changed = changed || ! juce::exactlyEqual (level, levels[k]);
+        levels[k] = level;
     }
-    return true;
+    return changed;
+}
+
+bool SpectrumAnalyzer::isSilent() const noexcept
+{
+    return std::all_of (levels.begin(), levels.end(), [] (float l) { return juce::exactlyEqual (l, floorDb); });
 }
 
 float SpectrumAnalyzer::levelAt (float hz) const noexcept

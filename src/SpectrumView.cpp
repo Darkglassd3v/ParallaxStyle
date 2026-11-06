@@ -141,7 +141,17 @@ void SpectrumView::mouseDoubleClick (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-void SpectrumView::refresh()
+std::vector<float> SpectrumView::readShownParameters() const
+{
+    std::vector<float> values;
+    for (auto* id : { "lowfreq", "midfrom", "midto", "highfreq", "lowon", "midon", "highon",
+                      "eqlofreq", "eqlogain", "eqm1freq", "eqm1gain", "eqm2freq", "eqm2gain",
+                      "eqhifreq", "eqhigain" })
+        values.push_back (processor.apvts.getRawParameterValue (id)->load());
+    return values;
+}
+
+bool SpectrumView::refresh()
 {
     const double rate = processor.getSampleRate() > 0.0 ? processor.getSampleRate() : 48000.0;
     inputSpectrum.setSampleRate (rate);
@@ -152,13 +162,22 @@ void SpectrumView::refresh()
     const int gotOut = processor.readAnalyzerOutput (scratch.data(), (int) scratch.size());
     outputSpectrum.push (scratch.data(), gotOut);
 
-    // senza segnale gli spettri continuano a scendere fino al fondo
-    if (gotIn == 0)  { std::fill_n (scratch.begin(), 512, 0.0f); inputSpectrum.push (scratch.data(), 512); }
-    if (gotOut == 0) { std::fill_n (scratch.begin(), 512, 0.0f); outputSpectrum.push (scratch.data(), 512); }
+    // senza segnale gli spettri continuano a scendere fino al fondo, poi si fermano
+    std::fill_n (scratch.begin(), 512, 0.0f);
+    if (gotIn == 0 && ! inputSpectrum.isSilent())   inputSpectrum.push (scratch.data(), 512);
+    if (gotOut == 0 && ! outputSpectrum.isSilent()) outputSpectrum.push (scratch.data(), 512);
 
-    inputSpectrum.update();
-    outputSpectrum.update();
+    const bool inputChanged  = inputSpectrum.update();
+    const bool outputChanged = outputSpectrum.update();
+    auto shown = readShownParameters();
+    const bool parametersChanged = shown != shownParameters;
+    shownParameters = std::move (shown);
+
+    if (! (inputChanged || outputChanged || parametersChanged))
+        return false;
+
     repaint();
+    return true;
 }
 
 float SpectrumView::yForDb (float db) const noexcept

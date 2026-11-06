@@ -25,8 +25,12 @@ public:
     // Aggiunge campioni: restano gli ultimi `size`.
     void push (const float* samples, int numSamples);
 
-    // Ricalcola lo spettro; false se non sono arrivati campioni dall'ultima volta.
+    // Ricalcola lo spettro; true solo se qualche livello è cambiato (false anche
+    // senza campioni nuovi, o con un silenzio già arrivato al fondo).
     bool update();
+
+    // Tutto lo spettro è al fondo: niente da mostrare
+    bool isSilent() const noexcept;
 
     // Livello in dB alla frequenza data, interpolato tra i bin.
     float levelAt (float hz) const noexcept;
