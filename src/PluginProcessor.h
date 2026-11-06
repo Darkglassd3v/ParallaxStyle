@@ -68,6 +68,14 @@ public:
     double getTunerSampleRate() const noexcept { return tunerSampleRate; }
 #endif
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    // Analizzatore di spettro: ingresso (dopo input gain e gate) e uscita, mono.
+    // Si riempiono solo mentre l'editor li chiede, così senza GUI non costano nulla.
+    void setAnalyzerActive (bool shouldBeActive) noexcept { analyzerActive = shouldBeActive; }
+    int readAnalyzerInput  (float* dest, int maxSamples) { return analyzerInput.read (dest, maxSamples); }
+    int readAnalyzerOutput (float* dest, int maxSamples) { return analyzerOutput.read (dest, maxSamples); }
+#endif
+
     // Meters: la GUI legge e resetta il picco accumulato (linear gain)
     float consumeInputPeak()  noexcept { return inputPeak.exchange (0.0f); }
     float consumeOutputPeak() noexcept { return outputPeak.exchange (0.0f); }
@@ -177,6 +185,21 @@ private:
     float decimAccum = 0.0f;
     int   decimCount = 0;
     double tunerSampleRate = 12000.0;
+#endif
+
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    // FIFO lock-free audio -> GUI di un segnale mono (media dei canali)
+    struct MonoTap
+    {
+        static constexpr int capacity = 16384;
+        juce::AbstractFifo fifo { capacity };
+        std::vector<float> data = std::vector<float> ((size_t) capacity, 0.0f);
+
+        void push (const juce::AudioBuffer<float>& buffer);
+        int  read (float* dest, int maxSamples);
+    };
+    MonoTap analyzerInput, analyzerOutput;
+    std::atomic<bool> analyzerActive { false };
 #endif
 
     std::atomic<float>* pInput    = nullptr;

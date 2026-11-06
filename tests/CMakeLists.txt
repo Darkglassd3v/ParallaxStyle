@@ -64,8 +64,11 @@ parallaxstyle_add_tests(ParallaxStyleTests 0
     ProcessorTests.cpp
     EditorTests.cpp
     AnalyzerTests.cpp
+    EditorSnapshot.cpp
     "${PROJECT_SOURCE_DIR}/src/PluginProcessor.cpp"
     "${PROJECT_SOURCE_DIR}/src/PluginEditor.cpp"
+    "${PROJECT_SOURCE_DIR}/src/SpectrumAnalyzer.cpp"
+    "${PROJECT_SOURCE_DIR}/src/SpectrumView.cpp"
 )
 
 parallaxstyle_add_tests(ParallaxStyleAnagramTests 1

@@ -124,6 +124,8 @@ else()
     target_sources(ParallaxStyle PRIVATE
         src/PluginProcessor.cpp
         src/PluginEditor.cpp
+        src/SpectrumAnalyzer.cpp
+        src/SpectrumView.cpp
     )
 
     target_compile_definitions(ParallaxStyle PRIVATE

@@ -224,3 +224,10 @@ TEST_F (SpectrumViewTest, PaintsTheSpectrumOfTheSignal)
     const auto image = view->createComponentSnapshot (view->getLocalBounds());
     EXPECT_TRUE (image.isValid());
 }
+
+TEST (PitchDetectorTest, ReadoutRoundsTheCentsToWholeNumbers)
+{
+    EXPECT_EQ (pitch::readout (83.4f), "83.4 Hz  +21 cent");    // E2 + 20.7 cent
+    EXPECT_EQ (pitch::readout (108.0f), "108.0 Hz  -32 cent");  // A2 - 31.8 cent
+    EXPECT_EQ (pitch::readout (110.0f), "110.0 Hz  +0 cent");
+}

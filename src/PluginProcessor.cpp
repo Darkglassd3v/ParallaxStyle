@@ -400,6 +400,42 @@ int ParallaxStyleProcessor::readTunerSamples (float* dest, int maxSamples)
 }
 #endif
 
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+void ParallaxStyleProcessor::MonoTap::push (const juce::AudioBuffer<float>& buffer)
+{
+    const int numChannels = buffer.getNumChannels();
+    const int numSamples  = buffer.getNumSamples();
+    const float chScale   = 1.0f / (float) juce::jmax (1, numChannels);
+
+    int start1, size1, start2, size2;
+    fifo.prepareToWrite (numSamples, start1, size1, start2, size2);   // se piena, scarta
+
+    auto write = [&] (int dest, int count, int sourceOffset)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            float mono = 0.0f;
+            for (int ch = 0; ch < numChannels; ++ch)
+                mono += buffer.getSample (ch, sourceOffset + i);
+            data[(size_t) (dest + i)] = mono * chScale;
+        }
+    };
+    write (start1, size1, 0);
+    write (start2, size2, size1);
+    fifo.finishedWrite (size1 + size2);
+}
+
+int ParallaxStyleProcessor::MonoTap::read (float* dest, int maxSamples)
+{
+    int start1, size1, start2, size2;
+    fifo.prepareToRead (maxSamples, start1, size1, start2, size2);
+    std::copy_n (data.begin() + start1, size1, dest);
+    std::copy_n (data.begin() + start2, size2, dest + size1);
+    fifo.finishedRead (size1 + size2);
+    return size1 + size2;
+}
+#endif
+
 void ParallaxStyleProcessor::accumulatePeak (std::atomic<float>& target,
                                              const juce::AudioBuffer<float>& buf)
 {
@@ -640,6 +676,10 @@ void ParallaxStyleProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 #if ! PARALLAXSTYLE_ANAGRAM_BUILD
     if (tunerOn)
         pushTunerSamples (buffer);
+
+    const bool analyzerOn = analyzerActive.load (std::memory_order_relaxed);
+    if (analyzerOn)
+        analyzerInput.push (buffer);
 #endif
 
     // --- dry tap ---
@@ -815,6 +855,11 @@ void ParallaxStyleProcessor::processChunk (juce::AudioBuffer<float>& buffer)
             }
         }
     }
+#endif
+
+#if ! PARALLAXSTYLE_ANAGRAM_BUILD
+    if (analyzerOn)
+        analyzerOutput.push (buffer);
 #endif
 
     accumulatePeak (outputPeak, buffer);
