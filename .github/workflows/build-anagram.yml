@@ -1,0 +1,136 @@
+name: Build Anagram
+
+# Build LV2 pesante e lenta (~1h, ~15GB) perché builda da zero il toolchain
+# di cross-compilazione ARM64 di Darkglass (crosstool-ng via
+# mod-plugin-builder), quindi NON gira su ogni push come build.yml: solo a
+# mano, sui tag di release e sulle pull request che cambiano questo workflow
+# o le immagini del blocco. Nessun artifact: lo zip va solo nella release.
+on:
+  push:
+    tags: [ "v*.*.*" ]
+  pull_request:
+    paths:
+      - .github/workflows/build-anagram.yml
+      - assets/anagram/**
+  workflow_dispatch:
+    inputs:
+      toolchain_target:
+        description: "Target immagine docker Darkglass (vedi BUILDING-DOCKER.md)"
+        type: choice
+        options: [ full, minimal ]
+        default: full
+
+permissions:
+  contents: write
+
+jobs:
+  build-anagram:
+    name: anagram-lv2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL "$AGENT_TOOLSDIRECTORY" || true
+          docker image prune -af || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          path: ParallaxStyle
+
+      # fissato a un commit (main del 22/10/2026): un branch che si muove cambierebbe
+      # il toolchain senza un cambiamento in questo repository
+      - name: Checkout Darkglass Plugin-Dev-Setup (solo docker/)
+        uses: actions/checkout@v4
+        with:
+          repository: Darkglass-Electronics/Plugin-Dev-Setup
+          ref: 78b2e4afd2a7999c28ada4338031b4b4d73e5940
+          sparse-checkout: |
+            docker
+          path: Plugin-Dev-Setup
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build/pull cached Anagram toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: Plugin-Dev-Setup/docker
+          tags: darkglass-anagram:latest
+          # Dal fork Darkglass di plugin-builder (settembre 2026) "full" non è più un
+          # target: bootstrap.sh esegue "make full", che non esiste. La build completa
+          # è il target vuoto; "minimal" resta.
+          build-args: |
+            debug=false
+            target=${{ github.event.inputs.toolchain_target == 'minimal' && 'minimal' || '' }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Version (a tag must match CMakeLists.txt)
+        id: ver
+        working-directory: ParallaxStyle
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then V=$(bash scripts/version.sh "$GITHUB_REF_NAME"); else V=$(bash scripts/version.sh); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile ParallaxStyle per Anagram
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/ParallaxStyle:/root/source" \
+            darkglass-anagram:latest \
+            bash -ic '
+              set -e
+              cmake -S /root/source -B /root/source/build-anagram -DTARGET_ANAGRAM=ON -DCMAKE_BUILD_TYPE=Release
+              $(which cmake) --build /root/source/build-anagram
+            '
+
+      # La 1.8.0 si fermava qui: il bundle è in ParallaxStyle_artefacts/Release/LV2,
+      # non in ParallaxStyle_artefacts/LV2.
+      - name: PDF guide
+        working-directory: ParallaxStyle
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+          bash scripts/build-guide.sh "${{ steps.ver.outputs.version }}" "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf"
+
+      - name: Package
+        working-directory: ParallaxStyle
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          F=$(echo "$V" | tr . _)
+          BUNDLE="build-anagram/ParallaxStyle_artefacts/Release/LV2/ParallaxStyle-$F.lv2"
+          test -f "$BUNDLE/ParallaxStyle-$F.so" || { ls -R build-anagram/ParallaxStyle_artefacts; echo "::error::$BUNDLE missing"; exit 1; }
+          test -f "$BUNDLE/manifest.ttl"
+          mkdir -p stage release
+          sudo cp -R "$BUNDLE" stage/
+          sudo chown -R "$(id -u):$(id -g)" stage
+          cp "guide/ParallaxStyle-$V-Guida.pdf" stage/
+          cat > stage/LEGGIMI.txt << INFO
+          ParallaxStyle $V - plugin LV2 per Darkglass Anagram
+
+          Contenuto:
+            ParallaxStyle-$F.lv2   il plugin (abbreviazione PLX)
+            ParallaxStyle-$V-Guida.pdf   guida: installazione sul pedale, aggiornamento e novità
+
+          Installazione (unità in Developer Mode, collegata via USB):
+            ssh root@192.168.51.1 "rm -rf /root/.lv2/ParallaxStyle*.lv2"
+            scp -O -r ParallaxStyle-$F.lv2 root@192.168.51.1:/root/.lv2/
+            ssh root@192.168.51.1 "systemctl restart jack2 lvgl-app"
+
+          Commit: ${GITHUB_SHA}
+          Build:  $(date -u +"%Y-%m-%d %H:%M") UTC
+          INFO
+          (cd stage && cmake -E tar cf "../release/ParallaxStyle-$V-anagram-lv2.zip" --format=zip -- *)
+          ls -la release
+
+      # azione condivisa: versione nel nome e guida dentro lo zip controllate,
+      # note dalla guida; pubblica solo sui tag (la release di solito esiste già)
+      - name: GitHub Release
+        uses: Darkglassd3v/.github/actions/release@v1
+        with:
+          version: ${{ steps.ver.outputs.version }}
+          files: ParallaxStyle/release/*.zip
+          changelog: ParallaxStyle/docs/ParallaxStyle.md
+          title: ParallaxStyle v${{ steps.ver.outputs.version }}
+          replace: "true"

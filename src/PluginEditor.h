@@ -1,116 +1,67 @@
 #pragma once
 
+#include "PitchDetector.h"
 #include "PluginProcessor.h"
-
-//==============================================================================
-class DarkLookAndFeel : public juce::LookAndFeel_V4
-{
-public:
-    DarkLookAndFeel()
-    {
-        setColour (juce::Slider::textBoxTextColourId,    juce::Colour (0xffd0d0d0));
-        setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        setColour (juce::ComboBox::backgroundColourId,   juce::Colour (0xff1a1a1e));
-        setColour (juce::ComboBox::textColourId,         juce::Colour (0xffd0d0d0));
-        setColour (juce::ComboBox::outlineColourId,      juce::Colour (0xff3a3a42));
-        setColour (juce::PopupMenu::backgroundColourId,  juce::Colour (0xff1a1a1e));
-        setColour (juce::PopupMenu::textColourId,        juce::Colour (0xffd0d0d0));
-        setColour (juce::TextButton::buttonColourId,     juce::Colour (0xff26262c));
-        setColour (juce::TextButton::textColourOffId,    juce::Colour (0xffd0d0d0));
-        setColour (juce::ToggleButton::textColourId,     juce::Colour (0xffd0d0d0));
-        setColour (juce::ToggleButton::tickColourId,     juce::Colour (0xff00c8ff));
-        setColour (juce::TabbedComponent::backgroundColourId, juce::Colours::transparentBlack);
-        setColour (juce::TabbedComponent::outlineColourId,    juce::Colour (0xff34343c));
-        setColour (juce::TabbedButtonBar::tabTextColourId,         juce::Colour (0xff909098));
-        setColour (juce::TabbedButtonBar::frontTextColourId,       juce::Colour (0xff00c8ff));
-    }
-
-    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
-                           float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
-                           juce::Slider&) override
-    {
-        auto bounds = juce::Rectangle<float> ((float) x, (float) y,
-                                              (float) width, (float) height).reduced (6.0f);
-        const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto centre  = bounds.getCentre();
-        const float angle  = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
-        const float lineW  = radius * 0.12f;
-        const float arcR   = radius - lineW * 0.5f;
-
-        juce::Path track;
-        track.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f,
-                             rotaryStartAngle, rotaryEndAngle, true);
-        g.setColour (juce::Colour (0xff2a2a30));
-        g.strokePath (track, juce::PathStrokeType (lineW, juce::PathStrokeType::curved,
-                                                   juce::PathStrokeType::rounded));
-
-        juce::Path value;
-        value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f,
-                             rotaryStartAngle, angle, true);
-        g.setColour (juce::Colour (0xff00c8ff));
-        g.strokePath (value, juce::PathStrokeType (lineW, juce::PathStrokeType::curved,
-                                                   juce::PathStrokeType::rounded));
-
-        const float knobR = arcR - lineW * 1.2f;
-        g.setColour (juce::Colour (0xff18181c));
-        g.fillEllipse (centre.x - knobR, centre.y - knobR, knobR * 2.0f, knobR * 2.0f);
-        g.setColour (juce::Colour (0xff3a3a42));
-        g.drawEllipse (centre.x - knobR, centre.y - knobR, knobR * 2.0f, knobR * 2.0f, 1.5f);
-
-        juce::Path pointer;
-        pointer.addRoundedRectangle (-lineW * 0.4f, -knobR, lineW * 0.8f, knobR * 0.45f, lineW * 0.3f);
-        pointer.applyTransform (juce::AffineTransform::rotation (angle)
-                                    .translated (centre.x, centre.y));
-        g.setColour (juce::Colour (0xffe8e8e8));
-        g.fillPath (pointer);
-    }
-};
+#include "SpectrumView.h"
+#include "Theme.h"
 
 //==============================================================================
 // Meter di livello peak con decay balistico. Riceve il picco (linear) via
-// pushLevel() dal timer dell'editor; scala -60..0 dBFS.
+// pushLevel() dal timer dell'editor; scala -60..0 dBFS, LED di clip a destra.
 class LevelMeter : public juce::Component
 {
 public:
     void pushLevel (float linearPeak)
     {
         const float db = juce::Decibels::gainToDecibels (linearPeak, -60.0f);
+        const float previousDb = displayDb;
+        const bool  previousClip = clip;
         displayDb = juce::jmax (db, displayDb - 2.0f);   // decay ~60 dB/s @30fps
-        clip = clip || linearPeak >= 1.0f;
-        if (db >= displayDb) clipHold = 30;              // ~1 s
-        if (clipHold > 0) --clipHold; else clip = false;
-        repaint();
+
+        // il LED si riaccende solo a un nuovo clip, poi resta ~1 s
+        if (linearPeak >= 1.0f)
+        {
+            clip = true;
+            clipHold = 30;                               // ~1 s @30fps
+        }
+        else if (clipHold > 0)
+        {
+            --clipHold;
+        }
+        else
+        {
+            clip = false;
+        }
+
+        if (! juce::approximatelyEqual (displayDb, previousDb) || clip != previousClip)
+            repaint();   // a riposo il meter non ridisegna
     }
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds().toFloat();
-        g.setColour (juce::Colour (0xff1a1a1e));
-        g.fillRoundedRectangle (r, 3.0f);
+        const auto r = getLocalBounds().toFloat();
+        const float radius = r.getHeight() * 0.5f;
+        auto bar = r.withTrimmedRight (10.0f);
+
+        g.setColour (theme::raised);
+        g.fillRoundedRectangle (bar, radius);
 
         const float norm = juce::jlimit (0.0f, 1.0f, (displayDb + 60.0f) / 60.0f);
-        auto fill = r.reduced (2.0f);
-        fill.setWidth (fill.getWidth() * norm);
-
-        juce::ColourGradient grad (juce::Colour (0xff40e080), r.getX(), 0.0f,
-                                   juce::Colour (0xffe04040), r.getRight(), 0.0f, false);
-        grad.addColour (0.75, juce::Colour (0xffe0c040));
-        g.setGradientFill (grad);
-        g.fillRoundedRectangle (fill, 2.0f);
-
-        if (clip)
+        if (norm > 0.0f)
         {
-            g.setColour (juce::Colour (0xffe04040));
-            g.fillRect (r.getRight() - 6.0f, r.getY(), 4.0f, r.getHeight());
+            juce::ColourGradient grad (theme::low, bar.getX(), 0.0f, theme::clip, bar.getRight(), 0.0f, false);
+            grad.addColour (0.7, theme::mid);
+            g.setGradientFill (grad);
+            g.fillRoundedRectangle (bar.withWidth (juce::jmax (r.getHeight(), bar.getWidth() * norm)), radius);
         }
 
         // tacche a -18 e -6 dB
-        g.setColour (juce::Colour (0x50ffffff));
+        g.setColour (theme::background.withAlpha (0.6f));
         for (float mark : { -18.0f, -6.0f })
-        {
-            const float mx = r.getX() + r.getWidth() * (mark + 60.0f) / 60.0f;
-            g.fillRect (mx, r.getY(), 1.0f, r.getHeight());
-        }
+            g.fillRect (bar.getX() + bar.getWidth() * (mark + 60.0f) / 60.0f, bar.getY(), 1.0f, bar.getHeight());
+
+        g.setColour (clip ? theme::clip : theme::raised);
+        g.fillRoundedRectangle (r.withLeft (r.getRight() - 6.0f), 2.0f);
     }
 
 private:
@@ -127,9 +78,13 @@ public:
     explicit TunerComponent (ParallaxStyleProcessor& p);
     void paint (juce::Graphics&) override;
 
+    // Legge i campioni e aggiorna nota, cent e descrizione accessibile
+    // ("A2, +3 cent", vuota senza nota, "Tuner off"); il timer lo fa a 20 Hz.
+    void update();
+
 private:
-    void timerCallback() override;
-    float detectPitch() const;
+    void timerCallback() override { update(); }
+    void setShown (const juce::String& description);
 
     ParallaxStyleProcessor& processor;
     std::atomic<float>* pTunerOn = nullptr;
@@ -140,61 +95,90 @@ private:
     int windowFill = 0;
 
     float smoothedFreq = 0.0f;
-    juce::String noteName = "-";
-    float cents = 0.0f;
+    pitch::Note note;
     bool hasSignal = false;
 };
 
 //==============================================================================
-// Pagina BANDS del tab
+// Manopola con etichetta sopra e valore sotto, in una cella di 64 x 80 px.
+struct Knob
+{
+    static constexpr int width = 64, height = 80;
+
+    juce::Slider slider;
+    juce::Label  label;
+
+    void setup (juce::Component& parent, const juce::String& name, juce::Colour colour,
+                const juce::String& suffix = {});
+    void setTopLeft (int x, int y);
+};
+
+//==============================================================================
+// Card con titolo nel colore della sezione; quando la sezione è spenta il
+// contenuto si oscura (i controlli restano usabili).
+class Card : public juce::Component
+{
+public:
+    Card (const juce::String& title, const juce::String& subtitle, juce::Colour colour, bool hasPowerSwitch);
+
+    juce::ToggleButton power;
+    std::function<bool()> isActive;                        // default: lo stato di power
+    std::function<juce::Rectangle<int>()> dimmedArea;      // default: tutto sotto il titolo
+
+    void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
+    void resized() override;
+
+    static constexpr int headerHeight = 34;
+
+private:
+    juce::String title, subtitle;
+    juce::Colour colour;
+};
+
+//==============================================================================
 class BandsPage : public juce::Component
 {
 public:
-    juce::Slider lowFreqS, compS, lowSatS, lowLevelS;
-    juce::Label  lowFreqL, compL, lowSatL, lowLevelL;
-    juce::Slider midFromS, midToS, midGainS, midDriveS;
-    juce::Label  midFromL, midToL, midGainL, midDriveL;
-    juce::ComboBox midCharBox;
-    juce::Label midCharL;
-    juce::Slider highFreqS, driveS, toneS, highLevelS;
-    juce::Label  highFreqL, driveL, toneL, highLevelL;
-    juce::ComboBox characterBox;
-    juce::Label characterL;
-    juce::ToggleButton lowOnT { "ON" }, midOnT { "ON" }, highOnT { "ON" };
-
     BandsPage();
-    void paint (juce::Graphics&) override;
     void resized() override;
+
+    Card lowCard  { "LOW",  "COMP + SAT",   theme::low,  true };
+    Card midCard  { "MID",  "EQ + DRIVE",   theme::mid,  true };
+    Card highCard { "HIGH", "DRIVE + TONE", theme::high, true };
+
+    Knob lowFreq, comp, lowSat, lowLevel;
+    Knob midFrom, midTo, midGain, midDrive;
+    Knob highFreq, drive, tone, highLevel;
+    juce::ComboBox midCharacter, character;
+    juce::Label midCharacterLabel, characterLabel;
 };
 
-//==============================================================================
-// Pagina CAB IR del tab
-class CabPage : public juce::Component
-{
-public:
-    juce::ComboBox cabBox;
-    juce::Label cabL;
-    juce::TextButton loadIRButton { "LOAD IR" };
-    juce::Label irNameLabel;
-    juce::Slider irLevelS;
-    juce::Label  irLevelL;
-
-    CabPage();
-    void paint (juce::Graphics&) override;
-    void resized() override;
-};
-
-//==============================================================================
-// Pagina EQ post del tab
 class EqPage : public juce::Component
 {
 public:
-    juce::Slider loFreqS, loGainS, m1FreqS, m1GainS, m2FreqS, m2GainS, hiFreqS, hiGainS;
-    juce::Label  loFreqL, loGainL, m1FreqL, m1GainL, m2FreqL, m2GainL, hiFreqL, hiGainL;
-
     EqPage();
-    void paint (juce::Graphics&) override;
     void resized() override;
+
+    Card loCard { "LOW SHELF",  {}, theme::accent, false };
+    Card m1Card { "MID 1",      {}, theme::accent, false };
+    Card m2Card { "MID 2",      {}, theme::accent, false };
+    Card hiCard { "HIGH SHELF", {}, theme::accent, false };
+    Knob loFreq, loGain, m1Freq, m1Gain, m2Freq, m2Gain, hiFreq, hiGain;
+};
+
+class CabPage : public juce::Component
+{
+public:
+    CabPage();
+    void resized() override;
+
+    Card card { "CAB IR", "IMPULSE RESPONSE", theme::accent, false };
+    juce::ComboBox position;
+    juce::Label positionLabel;
+    juce::TextButton loadIR { "LOAD IR" };
+    juce::Label irName;
+    Knob irLevel;
 };
 
 //==============================================================================
@@ -213,35 +197,44 @@ private:
     using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    void timerCallback() override;   // meter + label IR
+public:
+    // Meter e nome dell'IR; il timer lo fa a 30 Hz
+    void refreshIndicators();
+
+private:
+    void timerCallback() override { refreshIndicators(); }
+    void setupHeader();       // titolo, versione, preset, reset
+    void setupPages();        // BANDS, EQ, CAB
+    void setupFooter();       // ingresso, meter, tuner, uscita
+    void attachParameters();
 
     ParallaxStyleProcessor& processor;
-    DarkLookAndFeel lnf;
+    ParallaxLookAndFeel lnf;
 
-    // Top bar (sempre visibile)
-    juce::Slider inputS, gateS, blendS, outputS;
-    juce::Label  inputL, gateL, blendL, outputL;
-    LevelMeter inMeter, outMeter;
-    juce::Label inMeterL, outMeterL;
-
-    // Tab centrale
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    BandsPage bandsPage;
-    CabPage cabPage;
-    EqPage eqPage;
-    std::unique_ptr<juce::FileChooser> fileChooser;
-
-    // Preset
+    // Header
+    juce::Label titleLabel, versionLabel;
     juce::TextButton presetSaveB { "SAVE" }, presetLoadB { "LOAD" }, resetB { "RESET" };
 
-    // Tuner (sempre visibile, abilitabile)
+    // Spettro con le bande
+    SpectrumView spectrum;
+
+    // Pagine
+    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    BandsPage bandsPage;
+    EqPage eqPage;
+    CabPage cabPage;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
+    // Footer: ingresso, meter, tuner, uscita
+    Knob input, gate, blend, output;
+    LevelMeter inMeter, outMeter;
+    juce::Label inMeterLabel, outMeterLabel;
     juce::ToggleButton tunerToggle { "TUNER" };
     TunerComponent tuner;
 
     std::vector<std::unique_ptr<SliderAttachment>> sliderAttachments;
-    std::unique_ptr<ComboAttachment> characterAttachment, cabAttachment, midCharAttachment;
-    std::unique_ptr<ButtonAttachment> tunerAttachment;
-    std::unique_ptr<ButtonAttachment> lowOnAttachment, midOnAttachment, highOnAttachment;
+    std::vector<std::unique_ptr<ComboAttachment>>  comboAttachments;
+    std::vector<std::unique_ptr<ButtonAttachment>> buttonAttachments;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParallaxStyleEditor)
 };
