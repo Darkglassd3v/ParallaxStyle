@@ -1,0 +1,95 @@
+name: Pulizia branch
+
+# Le credenziali delle sessioni automatiche possono spingere commit ma non cancellare rami
+# (GitHub risponde 403 sul receive-pack), quindi la chiusura passa da qui, con il token della
+# CI. Si lancia a mano da Actions, elencando i rami: non cancella niente da solo.
+on:
+  workflow_dispatch:
+    inputs:
+      branches:
+        description: "Branch da chiudere, separati da spazio o virgola"
+        required: true
+      dry_run:
+        description: "true = dice solo cosa farebbe"
+        required: false
+        default: "false"
+      archivia:
+        description: "Da chiudere ma unico: 'nome-tag=sha' (anche piu' d'uno, separati da spazio). Diventa un tag prima della chiusura."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  pulizia:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Un ramo che porta l'unica copia di qualcosa non e' spazzatura: prima diventa un tag,
+      # poi si chiude. Cosi' la storia resta raggiungibile e la lista dei branch si asciuga.
+      - name: Archivia come tag cio' che sta solo su un ramo
+        if: inputs.archivia != ''
+        env:
+          ARCHIVIA: ${{ inputs.archivia }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for voce in $ARCHIVIA; do
+            nome=${voce%%=*}; sha=${voce#*=}
+            git rev-parse --verify --quiet "$sha^{commit}" > /dev/null
+            if [ "$DRY" = "true" ]; then
+              echo "[prova] creerei il tag $nome su $sha"
+            else
+              git tag -a "$nome" "$sha" -m "Archivio: ultimo stato di un ramo chiuso."
+              git push origin "$nome"
+              echo "archiviato: $nome -> $sha"
+            fi
+          done
+
+      - name: Chiudi i branch gia' contenuti in main o in un tag
+        env:
+          ELENCO: ${{ inputs.branches }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -u
+          chiusi=0; saltati=0
+          for b in $(echo "$ELENCO" | tr ',' ' '); do
+            if [ "$b" = "master" ] || [ "$b" = "main" ]; then
+              echo "::error::$b e' il ramo principale: non si tocca"; saltati=$((saltati+1)); continue
+            fi
+            sha=$(git rev-parse --verify --quiet "refs/remotes/origin/$b") || {
+              echo "::notice::$b non esiste gia' piu'"; continue; }
+
+            # la rete di sicurezza: si chiude solo cio' che e' gia' raggiungibile da altrove
+            tag=$(git tag --contains "$sha" | head -1)
+            if git merge-base --is-ancestor "$sha" origin/main; then
+              dove="tutto in main"
+            elif [ -n "$tag" ]; then
+              dove="nel tag $tag"
+            else
+              echo "::error::$b ($sha) non e' contenuto ne' in main ne' in un tag: non lo chiudo"
+              saltati=$((saltati+1)); continue
+            fi
+
+            if [ "$DRY" = "true" ]; then
+              echo "[prova] chiuderei $b - $dove"
+            else
+              git push origin --delete "$b"
+              echo "chiuso $b - $dove"
+            fi
+            chiusi=$((chiusi+1))
+          done
+
+          {
+            echo "### Pulizia branch"
+            echo "- chiusi: $chiusi"
+            echo "- saltati perche' contenevano lavoro non raggiungibile altrove: $saltati"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$saltati" -eq 0 ]

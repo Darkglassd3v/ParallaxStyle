@@ -82,6 +82,9 @@ SNAP_DIR=/tmp xvfb-run -a build-tests/tests/ParallaxStyleTests_artefacts/Debug/P
   condivisa `Darkglassd3v/.github/actions/release`. Sui tag pubblica la release, con le
   note brevi prese dalla sezione "Novità della versione" della guida. Nessun artifact
   delle Actions: gli archivi vanno solo nella release.
+- `.github/workflows/pulizia-branch.yml` (manuale, come in dierre) chiude i branch
+  elencati solo se sono già contenuti in `main` o in un tag; con `dry_run` dice soltanto
+  cosa farebbe.
 - `.github/workflows/build-anagram.yml` cross-compila l'LV2 per Anagram (circa 1 ora) sui
   tag, a mano e sulle pull request che lo modificano, e aggiunge il suo archivio alla release.
 
