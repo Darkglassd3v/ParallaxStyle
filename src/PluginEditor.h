@@ -76,9 +76,20 @@ public:
     {
         const float db = juce::Decibels::gainToDecibels (linearPeak, -60.0f);
         displayDb = juce::jmax (db, displayDb - 2.0f);   // decay ~60 dB/s @30fps
-        clip = clip || linearPeak >= 1.0f;
-        if (db >= displayDb) clipHold = 30;              // ~1 s
-        if (clipHold > 0) --clipHold; else clip = false;
+        // il LED si riaccende solo a un nuovo clip, poi resta ~1 s
+        if (linearPeak >= 1.0f)
+        {
+            clip = true;
+            clipHold = 30;                               // ~1 s @30fps
+        }
+        else if (clipHold > 0)
+        {
+            --clipHold;
+        }
+        else
+        {
+            clip = false;
+        }
         repaint();
     }
 
@@ -222,6 +233,7 @@ private:
     juce::Slider inputS, gateS, blendS, outputS;
     juce::Label  inputL, gateL, blendL, outputL;
     LevelMeter inMeter, outMeter;
+    juce::Label versionLabel;
     juce::Label inMeterL, outMeterL;
 
     // Tab centrale

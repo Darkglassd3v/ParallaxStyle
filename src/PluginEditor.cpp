@@ -435,6 +435,11 @@ ParallaxStyleEditor::ParallaxStyleEditor (ParallaxStyleProcessor& p)
         addAndMakeVisible (*l);
     }
 
+    versionLabel.setText ("v" JucePlugin_VersionString, juce::dontSendNotification);
+    versionLabel.setFont (juce::FontOptions (12.0f));
+    versionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff707078));
+    addAndMakeVisible (versionLabel);
+
     // --- tab centrale ---
     tabs.addTab ("BANDS",  juce::Colours::transparentBlack, &bandsPage, false);
     tabs.addTab ("CAB IR", juce::Colours::transparentBlack, &cabPage,   false);
@@ -600,6 +605,8 @@ void ParallaxStyleEditor::resized()
         l.setBounds (x, y, knobW, labelH);
         s.setBounds (x, y + labelH, knobW, knobH);
     };
+
+    versionLabel.setBounds (196, 12, 80, 20);
 
     // --- preset + reset in alto a destra ---
     presetSaveB.setBounds (472, 8, 68, 24);
