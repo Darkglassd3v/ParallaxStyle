@@ -180,13 +180,21 @@ jobs:
           # the console banner is printed on macOS; on Windows it goes to the debugger output
           if [ "${{ matrix.platform }}" = macos ]; then grep -q "ParallaxStyle $V" standalone.log; fi
 
+      # Windows: pandoc dalle release GitHub con SHA-256 fisso, non da Chocolatey
+      # (il tag v1.9.0 si è fermato qui: il feed di Chocolatey rispondeva con un errore)
       - name: pandoc
         run: |
-          if [ "${{ matrix.platform }}" = macos ]; then brew install pandoc; else choco install pandoc -y --no-progress; fi
+          if [ "${{ matrix.platform }}" = macos ]; then
+            brew install pandoc
+          else
+            curl -fsSL -o pandoc.zip "https://github.com/jgm/pandoc/releases/download/3.5/pandoc-3.5-windows-x86_64.zip"
+            echo "887e980e2228d8d45a431936e8bc6270a50cc9a5a4ec7e62064a3a5de6423b71  pandoc.zip" | sha256sum -c -
+            unzip -q pandoc.zip -d "$RUNNER_TEMP"
+            echo "$RUNNER_TEMP/pandoc-3.5" >> "$GITHUB_PATH"
+          fi
 
       - name: PDF guide
         run: |
-          export PATH="$PATH:/c/Program Files/Pandoc"
           bash scripts/build-guide.sh "${{ steps.ver.outputs.version }}" "guide/ParallaxStyle-${{ steps.ver.outputs.version }}-Guida.pdf"
 
       - name: Package
